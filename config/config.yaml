@@ -1,0 +1,39 @@
+chat:
+  api_key:
+  base_url:
+  model: gpt-4o
+  max_tokens: 512  # 输出长度限制
+  temperature: 1.5  # 随机性（0~2）
+  top_p: 0.6  # 采样多样性（0~1）
+  stop: null  # 遇指定关键词停止输出
+  frequency_penalty: 1.5  # 重复啰嗦惩罚（-2~2）
+  presence_penalty: 0.5  # 话题新鲜度，越高越新（-2~2）
+  n: 1  # 生成多个不同回复
+  response_format: null  # 强制返回json
+  stream: true  # 流式输出
+
+state:
+  now_states: {
+              "assertiveness": 0,
+              "uncertainty": 0,
+              "warmth": 0
+            }
+  delta_tools_name: compute_delta
+  delta_tools_properties: {
+                            "assertiveness_delta": {
+                                "type": "number",
+                                "description": "表达判断的变化量（-2 到 +2）"
+                            },
+                            "uncertainty_delta": {
+                                "type": "number",
+                                "description": "不确定语气变化量（-2 到 +2）"
+                            },
+                            "warmth_delta": {
+                                "type": "number",
+                                "description": "情感温度变化量（-2 到 +2）"
+                            }
+                        }
+
+memory:
+  
+
