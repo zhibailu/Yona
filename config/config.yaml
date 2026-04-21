@@ -1,6 +1,6 @@
 chat:
   api_key:
-  base_url:
+  base_url: 
   model: gpt-4o
   max_tokens: 512  # 输出长度限制
   temperature: 1.5  # 随机性（0~2）
@@ -11,6 +11,10 @@ chat:
   n: 1  # 生成多个不同回复
   response_format: null  # 强制返回json
   stream: true  # 流式输出
+
+system:
+  ai_name: 小夜子
+  user: null
 
 state:
   now_states: {

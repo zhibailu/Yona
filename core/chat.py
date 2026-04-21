@@ -1,147 +1,162 @@
 from openai import OpenAI
 from output_format.convert import Convert
-from core.memory import Memory,EmbedMemory
+from core.memory import Memory, EmbedMemory
 from rag.embedding import Embedding
 import os
 from core.state import State
 from config.loader import Config
+from core.tool_call import ToolCallManager
 
 DATA_DIR = os.path.abspath(os.path.join(os.getcwd()))
 
 state = State()
 config = Config()
-class Chat():
-    def __init__(self,
-                chat_config = {
-                    "api_key": config.get("chat","api_key"),
-                    "base_url": config.get("chat","base_url"),
-                    "model": config.get("chat","model"),
-                    "max_tokens":config.get("chat","max_tokens"),
-                    "temperature":config.get("chat","temperature"),
-                    "top_p":config.get("chat","top_p"),
-                    "stop":config.get("chat","stop"),
-                    "frequency_penalty":config.get("chat","frequency_penalty"),
-                    "presence_penalty":config.get("chat","presence_penalty"),
-                    "n":config.get("chat","n"),
-                    "response_format":config.get("chat","response_format"),
-                    "stream":config.get("chat","stream")
-                },
-                memory_path = os.path.join(DATA_DIR, "history\\conversation_memory.json"),
-                embedmemory_path = os.path.join(DATA_DIR, "history\\embedding_memory.json"),
-                system_prompt="",
-                # 测试部分
-                tools=state.delta_tools,
-                tool_choice={"type": "function", "function": {"name": config.get("state","delta_tools_name")}} # 强制调用
-                 ):
-        
-        self.chat_config = chat_config
-        self.memory_path = memory_path
-        self.embedmemory_path = embedmemory_path
-        self.system_prompt = system_prompt
-        self.memory_history=[]  # 文件里的所有东西
-        self.memory = Memory(self.system_prompt, self.memory_path)
-    
-        # 加载历史记录
-        self.memory_history = self.memory.memory_history
 
-        # tool部分设计state，测试
+class Chat:
+    """
+    Chat 类负责处理对话逻辑，包括记忆管理、工具调用以及嵌入生成。
+    """
+    def __init__(self,
+                chat_config=None,
+                memory_path=None,
+                embedmemory_path=None,
+                system_prompt="",
+                tools=None,
+                tool_choice=None):
+        """
+        初始化 Chat 类。
+        参数：
+            - chat_config: 对话配置字典，从配置文件加载。
+            - memory_path: 记忆文件路径。
+            - embedmemory_path: 嵌入记忆文件路径。
+            - system_prompt: 系统提示词，用于引导对话风格。
+            - tools: 工具列表，用于扩展对话功能。
+            - tool_choice: 当前工具选择配置。
+        """
+        self.chat_config = chat_config or {
+            "api_key": config.get("chat", "api_key"),
+            "base_url": config.get("chat", "base_url"),
+            "model": config.get("chat", "model"),
+            "max_tokens": config.get("chat", "max_tokens"),
+            "temperature": config.get("chat", "temperature"),
+            "top_p": config.get("chat", "top_p"),
+            "stop": config.get("chat", "stop"),
+            "frequency_penalty": config.get("chat", "frequency_penalty"),
+            "presence_penalty": config.get("chat", "presence_penalty"),
+            "n": config.get("chat", "n"),
+            "response_format": config.get("chat", "response_format"),
+            "stream": config.get("chat", "stream")
+        }
+        self.memory_path = memory_path or os.path.join(DATA_DIR, "history/conversation_memory.json")
+        self.embedmemory_path = embedmemory_path or os.path.join(DATA_DIR, "history/embedding_memory.json")
+        self.system_prompt = system_prompt
+        self.memory = Memory(self.system_prompt, self.memory_path)
+        self.memory_history = self.memory.memory_history
         self.tools = tools
         self.tool_choice = tool_choice
+        self.tool_call_manager = ToolCallManager()
 
     def chat(self, user_input):
-        
-        # 准备meta集里的id
-        if self.memory_history and "id" in self.memory_history[-1][0]:  # 有记录就加
-            last_id = self.memory_history[-1][0].get("id")
-            id = last_id + 1
-        else:  # 剩下三种情况都从新开始
-            id = 1
+        # try:
+        # 构建消息上下文
+        messages = self.build_context(user_input)
 
+        # 调用 OpenAI API
         client = OpenAI(
             api_key=self.chat_config["api_key"],
-            base_url=self.chat_config["base_url"],
+            base_url=self.chat_config["base_url"]
         )
-        try:
-            # 全是记忆结构，后面要打包成一个convert才行，得扩展的
-            message = []
-
-            # 轮次保护，以此为界，前面的是完整的，后面的只为输出效果服务
-            self.memory.trim_history()
-            self.memory_history = self.memory.memory_history
-
-            for i in self.memory_history:
-                message.extend(i[0]["message"])
-
-            message.append({"role": "user", "content": user_input})
-
-            # 添加历史记录和当前输入
-            a=self.chat_config["max_tokens"]
-
-            response = client.chat.completions.create(
-                model=self.chat_config["model"],
-                messages=message,
-                max_tokens=self.chat_config["max_tokens"],
-                temperature=self.chat_config["temperature"],
-                top_p=self.chat_config["top_p"],
-                stop=self.chat_config["stop"],
-                frequency_penalty=self.chat_config["frequency_penalty"],
-                presence_penalty=self.chat_config["presence_penalty"],
-                n=self.chat_config["n"],
-                response_format=self.chat_config["response_format"],
-                stream=self.chat_config["stream"],
-
-                # tools测试
-                # tools=tools,
-                # tool_choice="auto"
-            )
-
-            print("ai: ", end="")
-            result, login = Convert().response_parser(response=response)  # 有问题，本来到这里就该输出了，为什么会等很久呢，前面也没进程啊
-            print()
-
-            # 把AI回复加入记忆，这里要加几个finish_reason的判断
-            if login.get("finish_reason") in ["stop", "length"]:
-                self.memory_history.append(Convert().context_builder(
-                    type="dialogue",
-                    id=id,
-                    user_input=user_input,
-                    ai_output=result,
-                    meta=login
-                ))
-
-                # 保存历史记录
-            
-            self.memory.save_memory()
-
-            # 把回复存入向量库
-            embed=Embedding()
-            embed_memory = EmbedMemory(self.embedmemory_path)
-
-            # 有点久，后面做异步
-            try:
-                embedding = embed.embed(result)
-                embedding_id=id
-                if self.system_prompt:
-                    embedding_id = embedding_id-1
-                embed_history = Convert().embed_builder(
-                    embedding,
-                    embedding_id=embedding_id,
-                    content_id=id,
-                    content=[
-                        {"role": "user", "content": user_input},
-                        {"role": "assistant", "content": result}
-                    ]
-                )
-
-                # 存储并矫正向量库
-                embed_memory.save_memory(embed_history)
-            except Exception as e:
-                print("⚠️ embedding失败，已跳过")
-
-            embed_memory.trim_memory(id)
+        response = client.chat.completions.create(
+            model=self.chat_config["model"],
+            messages=messages,
+            max_tokens=self.chat_config["max_tokens"],
+            temperature=self.chat_config["temperature"],
+            top_p=self.chat_config["top_p"],
+            stream=self.chat_config["stream"],
+            tools=[
+                {
+                "type": "function",
+                "function": {
+                        "name": "trigger_rag",
+                        "description": "当用户需要回忆历史对话、过往内容、上下文时调用，必须把用户的问题原封不动填入query",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "必须是用户当前的问题，原样复制，不要修改"
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                }
+            ]
+        )
 
 
-            return result
-    
-        except Exception as e:
-            print(f"\n\n❌ 服务异常：{str(e)}")
+        # 检查是否触发 Tool Call
+        tool_calls, _ = Convert().response_parser(response=response)
+
+        # 执行 Tool Call
+        rag_results = None
+        for tool_call in tool_calls:
+            if tool_call["name"] == "trigger_rag":
+                arguments = tool_call["arguments"]
+                print(f"🔧 Tool Call 触发: {tool_call['name']}, 参数: {arguments}")
+                rag_results = self.tool_call_manager.execute_tool(tool_call["name"], arguments)
+                break
+        
+        # 构建上下文（包含 Tool Call 的结果）
+        messages = self.build_context(user_input, rag_results=rag_results)
+
+        # 再次调用 OpenAI API，生成最终回复
+        response = client.chat.completions.create(
+            model=self.chat_config["model"],
+            messages=messages,
+            max_tokens=self.chat_config["max_tokens"],
+            temperature=self.chat_config["temperature"],
+            top_p=self.chat_config["top_p"],
+            stream=self.chat_config["stream"]
+        )
+
+        # 解析最终回复
+        result, meta = Convert().response_parser(response=response)
+
+        # 将当前对话存储到历史记录
+        self.memory_history.append(Convert().context_builder(
+            type="dialogue",
+            id=len(self.memory_history) + 1,
+            user_input=user_input,
+            ai_output=result,
+            meta=meta
+        ))
+        self.memory.save_memory()
+
+        return result
+        # except Exception as e:
+        #     print(f"❌ 服务异常：{e}")
+        #     return "抱歉，我无法处理您的请求。"
+        
+    def build_context(self, user_input, rag_results=None):
+        messages = []
+
+        # 将系统提示词放在最前面
+        if self.memory_history and self.memory_history[0][0]["type"] == "system_prompt":
+            messages.extend(self.memory_history[0][0]["message"])
+
+        # 添加对话历史记录（不包括系统提示词）
+        for record in self.memory_history[1:]:
+            messages.extend(record[0]["message"])
+
+        # 拼接 Tool Call 结果和用户输入
+        if rag_results:
+            rag_content = "以下是检索到的相关信息：\n"
+            for idx, result in enumerate(rag_results, start=1):  # 直接使用 query_with_format 返回的结果
+                rag_content += f"{idx}. {result}\n"
+            rag_content += f"用户的实际问题：{user_input}"
+            messages.append({"role": "user", "content": rag_content})
+        else:
+            messages.append({"role": "user", "content": user_input})
+
+        return messages
