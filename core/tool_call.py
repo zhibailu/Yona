@@ -39,7 +39,5 @@ class ToolCallManager:
         args_dict = json.loads(arguments)
         user_input = args_dict["query"]
 
-        a = DATA_DIR+"\\core\\tool_call\\embedding_memory.json"
-
         retriever = Retrieve(DATA_DIR+"\\history\\embedding_memory.json")
         return retriever.query_with_format(user_input, top_k=3)
