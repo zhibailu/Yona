@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 chat:
   api_key:
   base_url: 
@@ -20,3 +21,27 @@ system:
   user: null
 
 
+=======
+chat:
+  api_key:
+  base_url: 
+  model:
+  max_tokens: 512  # 输出长度限制
+  temperature: 1.5  # 随机性（0~2）
+  top_p: 0.6  # 采样多样性（0~1）
+  stop: null  # 遇指定关键词停止输出
+  frequency_penalty: 1.5  # 重复啰嗦惩罚（-2~2）
+  presence_penalty: 0.5  # 话题新鲜度，越高越新（-2~2）
+  n: 1  # 生成多个不同回复
+  response_format: null  # 强制返回json
+  stream: true  # 流式输出
+
+memory:
+  max_history_rounds: 5  # 最大记忆轮数
+
+system:
+  ai_name: 小夜子
+  user: null
+
+
+>>>>>>> 6639851a3a6813774391e09f907b7401da2316bd
