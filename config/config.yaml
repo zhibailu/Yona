@@ -1,7 +1,7 @@
 chat:
   api_key:
   base_url: 
-  model: gpt-4o
+  model:
   max_tokens: 512  # 输出长度限制
   temperature: 1.5  # 随机性（0~2）
   top_p: 0.6  # 采样多样性（0~1）
@@ -12,32 +12,11 @@ chat:
   response_format: null  # 强制返回json
   stream: true  # 流式输出
 
+memory:
+  max_history_rounds: 5  # 最大记忆轮数
+
 system:
   ai_name: 小夜子
   user: null
 
-state:
-  now_states: {
-              "assertiveness": 0,
-              "uncertainty": 0,
-              "warmth": 0
-            }
-  delta_tools_name: compute_delta
-  delta_tools_properties: {
-                            "assertiveness_delta": {
-                                "type": "number",
-                                "description": "表达判断的变化量（-2 到 +2）"
-                            },
-                            "uncertainty_delta": {
-                                "type": "number",
-                                "description": "不确定语气变化量（-2 到 +2）"
-                            },
-                            "warmth_delta": {
-                                "type": "number",
-                                "description": "情感温度变化量（-2 到 +2）"
-                            }
-                        }
-
-memory:
-  
 
