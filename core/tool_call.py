@@ -1,6 +1,7 @@
-from rag.retrieve import Retrieve
 import os
 import json
+
+from tools.trigger_rag import execute
 
 DATA_DIR = os.path.abspath(os.path.join(os.getcwd()))
 
@@ -14,7 +15,7 @@ class ToolCallManager:
             "trigger_rag": self._handle_retrieve
         }
 
-    def execute_tool(self, tool_name, arguments):
+    def execute_tool(self, tool_name, arguments, dialogue_id=None, max_history=None):
         """
         执行指定的工具。
         参数：
@@ -25,19 +26,14 @@ class ToolCallManager:
         """
         if tool_name not in self.tools:
             raise ValueError(f"未知的工具: {tool_name}")
-        return self.tools[tool_name](arguments)
+        return self.tools[tool_name](arguments, dialogue_id, max_history)
 
-    def _handle_retrieve(self, arguments):
-        """
-        处理 RAG 检索工具。
-        参数：
-            - arguments: tool_call解析返回的json格式的字符串
-        返回：
-            - 检索结果列表。
-        """
-        #提取用户的输入，tool里有定义
-        args_dict = json.loads(arguments)
-        user_input = args_dict["query"]
-
-        retriever = Retrieve(DATA_DIR+"\\history\\embedding_memory.json")
-        return retriever.query_with_format(user_input, top_k=3)
+    def _handle_retrieve(self, arguments, dialogue_id, max_history):
+        # 处理rag的检索功能
+        if isinstance(arguments, str):
+            args_dict = json.loads(arguments)
+        else:
+            args_dict = arguments
+            
+        # 调用rag的 execute
+        return execute(args_dict, dialogue_id, max_history)

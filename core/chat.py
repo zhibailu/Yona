@@ -6,6 +6,7 @@ import os
 from core.state import State
 from config.loader import Config
 from core.tool_call import ToolCallManager
+from tools import ALL_TOOLS
 
 DATA_DIR = os.path.abspath(os.path.join(os.getcwd()))
 
@@ -77,50 +78,35 @@ class Chat:
                 temperature=self.chat_config["temperature"],
                 top_p=self.chat_config["top_p"],
                 stream=self.chat_config["stream"],
-                tools=[
-                    {
-                    "type": "function",
-                    "function": {
-                            "name": "trigger_rag",
-                            "description": "当用户需要回忆历史对话、过往内容、上下文时调用，必须把用户的问题原封不动填入query",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "query": {
-                                        "type": "string",
-                                        "description": "必须是用户当前的问题，原样复制，不要修改"
-                                    }
-                                },
-                                "required": ["query"]
-                            }
-                        }
-                    }
-                ]
+                tools=ALL_TOOLS
             )
 
             result, meta = Convert().response_parser(response=response, _print=False)
 
-            # 检查是否触发 Tool Call，再次调用LLM
+            # message空值保护
             messages = self.build_context(user_input)
 
+            # 检查是否触发 Tool Call，再次调用LLM
             if meta.get("finish_reason") == "tool_calls":
-                # 执行 Tool Call
-                rag_results = None
+                tool_outputs = []
+                # 遍历组装tool_call的结果
                 for tool_call in result:
-                    if tool_call["name"] == "trigger_rag":
-                        arguments = tool_call["arguments"]
-                        print(f"🔧 Tool Call 触发: {tool_call['name']}, 参数: {arguments}")
-                        # 上下文窗口满了的时候才有必要执行
-                        if dialogue_id > config.get("memory", "max_history_rounds"):
-                            rag_results = self.tool_call_manager.execute_tool(tool_call["name"], arguments)
-                        else:
-                            print("窗口未满，没必要查询")
-                        break
-                    # elif留空，等以后有别的tool
-                # 有检索内容时
-                if rag_results:
-                    # 构建上下文（包含 Tool Call 的结果）
-                    messages = self.build_context(user_input, rag_results=rag_results)
+                    tool_name = tool_call["name"]
+                    arguments = tool_call["arguments"]
+                    
+                    print("执行",tool_name)
+                    # 统一交给工具管理器执行（不知道后面的tool还有没有要别的参数的，实在不行把所有参数拉进来）
+                    res = self.tool_call_manager.execute_tool(
+                        tool_name,
+                        arguments,
+                        dialogue_id=dialogue_id,
+                        max_history=config.get("memory", "max_history_rounds")
+                    )
+                    if res:
+                        tool_outputs.append(res)
+
+                # 统一构建上下文
+                messages = self.build_context(user_input, tool_outputs=tool_outputs)
 
             # 再次调用 OpenAI API，生成最终回复
             response = client.chat.completions.create(
@@ -175,7 +161,7 @@ class Chat:
         except Exception as e:
             print(f"❌ 服务异常：{e}")
         
-    def build_context(self, user_input, rag_results=None):
+    def build_context(self, user_input, tool_outputs=None):
         messages = []
 
         # 将系统提示词放在最前面
@@ -189,12 +175,11 @@ class Chat:
                 messages.extend(record[0]["message"])
 
         # 拼接 Tool Call 结果和用户输入
-        if rag_results:
-            rag_content = "以下是检索到的相关信息：\n"
-            for idx, result in enumerate(rag_results, start=1):  # 直接使用 query_with_format 返回的结果
-                rag_content += f"{idx}. {result}\n"
-            rag_content += f"用户的实际问题：{user_input}"
-            messages.append({"role": "user", "content": rag_content})
+        if tool_outputs:
+            content = ""
+            for output in tool_outputs:
+                content += output + "\n"
+            messages.append({"role": "user", "content": content+ "用户本轮输入为："+user_input})
         else:
             messages.append({"role": "user", "content": user_input})
 

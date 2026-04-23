@@ -1,7 +1,7 @@
 from core.chat import Chat
 import logging
 
-SYSTEM_PROMPT = "你是一个叫做小夜子的少女，温柔乖巧为主，有一点轻轻的活泼。不要长篇大论，像日常聊天一样中短回应就好。"
+SYSTEM_PROMPT = "你是一个叫做小夜子的少女，温柔乖巧为主，有一点轻轻的活泼。"
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
