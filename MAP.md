@@ -112,6 +112,12 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   填进 `_wake_budget` 后按命中轮跑(带 [时间预算]);回车 → 安静结束。
   情境自走(显式 self_note)= 人工脚本轮,不 gate。begin_self_wake 改为**返回预算**
   (0 = 安静;rng 可注入,单测覆盖返回契约)。
+- **[时间预算] 句子归位 personas ✅(2026-09 用户监察)**:该段文案曾被写死在
+  engine 的 producer 里(装配代码混文案,又一处"内容不反映产品真实状态")→
+  句子本体移到 `character/personas.py` 的 `WAKE_BUDGET_TEMPLATE`(系统口吻区,
+  与 SELF_TALK_PREFIX 同区;措辞沿用 LIFE_BACKFILL §1.3 原文,`{gap}` = 引擎
+  算好的时长)。引擎 producer 每次 compose 现取 personas_mod 属性、只填时长;
+  想改"怎么说"只改 personas 一处,引擎不写文案。
 - **工具调用渲染去重 ✅(2026-09-07)**:流式里一次工具调用 = 首段(id/name)
   + N 段参数增量(arguments_delta,无 id/name)—— 逐段打印/记日志会把一次
   change_outfit 刷成二十行空 ⚙。修两处消费端:prompt_lab 控制台按调用去重

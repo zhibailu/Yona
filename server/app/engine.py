@@ -490,13 +490,16 @@ def _build_engine(cfg: dict | None = None) -> None:
 
     def _wake_budget_text(values) -> str | None:
         """普通轮时间预算(2026-09 用户拍板:自走/心跳/脉冲与补写同一事件算法,
-        只是触发点不同 —— 普通轮也产"这段时间约 X 分钟"的预算,只做一件事、
-        别做做不完的事)。min=0 = 未激活,本段不出现(产品不设 = 没这回事)。"""
+        只是触发点不同 —— 命中事件的自走轮也产预算,告诉模型"这段时间约 X,
+        只做一件事")。min=0 = 未激活,本段不出现(产品不设 = 没这回事)。
+        **句子文案在 personas.WAKE_BUDGET_TEMPLATE(内容层归位)**,这里只算
+        时长填进 {gap} —— 想改"怎么说"去 personas 改一处,引擎不写文案。
+        producer 每次 compose 现取 personas_mod 属性(lab reload 文案即生效)。"""
         m = _wake_budget["min"]
         if m <= 0:
             return None
-        return (f"[时间预算] 这段时间约 {_human_gap(m * 60)},"
-                "只做一件事、别做做不完的事。")
+        gap = _human_gap(m * 60)
+        return "[时间预算] " + personas_mod.WAKE_BUDGET_TEMPLATE.format(gap=gap)
 
     wake_budget_section = SystemSection(
         name="wake_budget", priority=17, producer=_wake_budget_text)
