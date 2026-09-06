@@ -94,6 +94,7 @@ class AgentLoop:
         source: str = "user",
         log: SessionLog | None = None,
         on_chunk: Callable[[dict[str, Any]], None] | None = None,
+        on_input: Callable[[int, int, list[dict]], None] | None = None,
         self_note: str | None = None,
         *,
         temperature: float | None = None,
@@ -117,6 +118,10 @@ class AgentLoop:
         (llm/tools/builder 共享),事件各自落各自会话 —— 她这个人跨会话一致。
         on_chunk: 本轮流式回调(每 chunk 触发)。None = 用构造时的 on_chunk;
         显式传则覆盖本轮(server 每请求一个回调,多客户端互不串流)。
+        on_input: **每次真实 LLM 调用前**回调(turn, step, messages)——
+        喂给模型的完整输入(含 SYSTEM)。一轮里调几次 LLM 就触发几次
+        (调工具后下一步的输入带 tool/result,与上一步不同;2026-09 加,
+        供实验台逐次打印"组件拆分 + 实际发送")。None = 不回调。
 
         可选字段(2026-09,产品设置面板真接线;不给 = 用默认):
         - temperature/max_tokens: 本轮 LLM 调用覆盖(None = 实例默认,
@@ -132,7 +137,8 @@ class AgentLoop:
         """
         with self._turn_lock:
             return self._run_turn_locked(
-                user_input, tools, source, log or self.log, on_chunk, self_note,
+                user_input, tools, source, log or self.log, on_chunk, on_input,
+                self_note,
                 temperature=temperature, max_tokens=max_tokens, model=model,
                 max_rounds=max_rounds, system_prompt=system_prompt,
             )
@@ -144,6 +150,7 @@ class AgentLoop:
         source: str,
         log: SessionLog,
         on_chunk: Callable[[dict[str, Any]], None] | None,
+        on_input: Callable[[int, int, list[dict]], None] | None = None,
         self_note: str | None = None,
         *,
         temperature: float | None = None,
@@ -183,6 +190,11 @@ class AgentLoop:
                     active, source, log,
                     max_rounds=max_rounds, system_prompt=system_prompt,
                 )
+                # 每次真实 LLM 调用前回调(2026-09 加):本轮 feed 模型的
+                # 完整输入(SYSTEM + 历史投影)—— 调工具后下一步的输入带
+                # tool/result,跟上一步不一样;实验台逐次打印组件拆分+messages。
+                if on_input is not None:
+                    on_input(turn, step, messages)
                 blocks = self._stream_and_assemble(
                     turn, step, messages, active, log, on_chunk,
                     temperature=temperature, max_tokens=max_tokens, model=model,
