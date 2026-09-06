@@ -170,10 +170,8 @@ def _run_one_seed(loop, label, seed):
                 if gap > 60 else "\n你上一件事刚做完不久。"
             )
         note = (
-            "此刻没有人在跟你说话,你一个人过着平常的一天。\n"
             f"这段时间(约 {sm._human_gap(e.budget_min * 60)})里你只做了"
             "**一件事**——就是现在刚做完/正在做的这一件。"
-            "时间由系统给你,别自己报时间;不要写别的时间段的事。"
             f"{gap_note}"
         )
         life_log.set_time_cursor(e.start)
@@ -198,11 +196,14 @@ def part3_real(label, seed_str=None):
     llm = OpenAICompatibleLLM(api_key=api_key, base_url=base_url, model=model,
                               temperature=0.9, max_tokens=500)
     backfill_composer = build_small_night_composer(
-        sm.BACKFILL_PERSONA, sm._state, sm._tools,
+        sm.PERSONA, sm._state, sm._tools,
+        situation=sm.BACKFILL_SITUATION,
         world_now=lambda: time.localtime(_clock_holder[0]),
     )
-    self_composer = build_small_night_composer(sm.SELF_PERSONA, sm._state, sm._tools)
-    chat_composer = build_small_night_composer(sm.CHAT_PERSONA, sm._state, sm._tools)
+    self_composer = build_small_night_composer(
+        sm.PERSONA, sm._state, sm._tools, situation=sm.SELF_SITUATION)
+    chat_composer = build_small_night_composer(
+        sm.PERSONA, sm._state, sm._tools, situation=sm.CHAT_SITUATION)
 
     def sys_by_source(registry, source, log=None):
         if log is not None and log.time_cursor is not None:

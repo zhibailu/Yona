@@ -21,9 +21,10 @@ from .llm_setup import load_runtime
 
 from character.persona import build_small_night_composer
 from character.personas import (  # noqa: E402  人格文案(内容层),见文件头
-    BACKFILL_PERSONA,
-    CHAT_PERSONA,
-    SELF_PERSONA,
+    BACKFILL_SITUATION,
+    CHAT_SITUATION,
+    PERSONA,
+    SELF_SITUATION,
     VALUES,
 )
 from character.state import CharacterState
@@ -334,8 +335,10 @@ def _human_gap(seconds: float) -> str:
 # ---------- 装配 ----------
 
 def _build_engine(cfg: dict | None = None) -> None:
-    """建引擎:LLM 客户端 + 三套人格 composer + 主 AgentLoop(全局唯一)。
+    """建引擎:LLM 客户端 + 一份常驻人设 + 三种情境 composer + 主 AgentLoop。
 
+    2026-09 人设常驻:三套 composer 共享同一份 PERSONA,只换情境段
+    (陪聊/自走/补写是同一个她,不是三个人 —— 见 character/personas.py)。
     2026-09 任务③ 连接管理:cfg = 运行时连接配置(UI 向导落盘的
     data/llm.local.json,含 base_url/api_key/model/models)。缺配置/无效 →
     抛 RuntimeError,引擎保持禁用(聊天 503,UI 首启引导)。**.env 不再是
@@ -366,11 +369,16 @@ def _build_engine(cfg: dict | None = None) -> None:
             max_tokens=LLM_OUTPUT_MAX_TOKENS,
         )
     )
-    self_composer = build_small_night_composer(SELF_PERSONA, _state, _tools)
-    chat_composer = build_small_night_composer(CHAT_PERSONA, _state, _tools)
+    # 一份 PERSONA 常驻,三种轮只换"情境段"(2026-09 拍板修正:
+    # 人设 ≠ 轮的属性 —— 陪聊/自走/补写是同一个她,不是三个人)。
+    chat_composer = build_small_night_composer(
+        PERSONA, _state, _tools, situation=CHAT_SITUATION)
+    self_composer = build_small_night_composer(
+        PERSONA, _state, _tools, situation=SELF_SITUATION)
     # 补写回放轮:世界时间 = log 的时间游标(历史时刻),不是墙钟
     backfill_composer = build_small_night_composer(
-        BACKFILL_PERSONA, _state, _tools,
+        PERSONA, _state, _tools,
+        situation=BACKFILL_SITUATION,
         world_now=lambda: time.localtime(_backfill_clock["ts"]),
     )
 
@@ -526,11 +534,12 @@ def _maybe_backfill_life() -> None:
                             )
                         else:
                             gap_note = "\n你上一件事刚做完不久。"
+                    # note 只留"动态"部分(本段多长/隔了多久)——
+                    # 静态部分(你一个人、别报时间、别写别的时段)已在
+                    # BACKFILL_SITUATION(情境段)里,不在这里重复(2026-09 归位)。
                     note = (
-                        "此刻没有人在跟你说话,你一个人过着平常的一天。\n"
                         f"这段时间(约 {_human_gap(e.budget_min * 60)})里你只做了"
                         "**一件事**——就是现在刚做完/正在做的这一件。"
-                        "时间由系统给你,别自己报时间;不要写别的时间段的事。"
                         f"{gap_note}"
                     )
                     card_log.set_time_cursor(e.start)

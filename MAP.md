@@ -64,10 +64,16 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   查看全景。**内含 ⏳ 未拍项(见 §四),禁止当已定使用。**
 - **personas 归位 ✅(2026-09)**:人格文案在 `character/personas.py`
   (内容层);`character/persona.py` 是段工厂;engine 只装配。
+- **人设常驻归位 ✅(2026-09-06,用户监察拍板)**:旧三份轮次人格
+  (CHAT/SELF/BACKFILL_PERSONA,身份各写一遍、互相侵吞)→ 唯一 `PERSONA`
+  常驻一个组件 + 情境段(CHAT/SELF/BACKFILL_SITUATION,轮的属性,不重述身份);
+  engine 三 composer 共享 PERSONA;补写 note 里与情境段重复的句子已清。
 - **gate 方案② ✅(2026-09 方向拍板)**:与补写同一原语(概率 = 每天期望 ×
   shape × Δt);**三个数值 ⏳ 待拍(cooldown / interval / wakes_per_day)**
 - 人设笔误史:曾把 BACKFILL 写成"16 岁女孩"(与 21 岁冲突),已修回 ——
-  教训:搬移必须逐字,见 §五 规则 5。
+  教训:搬移必须逐字,见 §五 规则 5。**2026-09-06 再记一笔**:身份句曾
+  三处复制且陪聊版("AI 伴侣")与自走/补写版("21 岁女大学生")互相矛盾 ——
+  同源归位后,正典只存在于 `PERSONA` 一处。
 
 ---
 

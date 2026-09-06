@@ -1,10 +1,12 @@
 """小夜子 · 人设上下文装配(段工厂)
 
 把"人设长什么样"变成一组 SystemSection,交给内核 SystemComposer 拼装:
-  1. persona:   静态人设文本(模板,可含 {变量})
-  2. world:     世界基础信息(时间等动态死信息,每轮现取注入 —— VISION 决策 8)
-  3. state:     当前角色状态(动态 producer,闭包 state —— 状态变了 compose 自动新)
-  4. tool usage:工具用法散文(由 make_usage_section 提供,内核通用)
+  1. persona:   静态人设文本(模板,可含 {变量})—— **唯一常驻段**
+  2. situation: 轮次情境段(可选:陪聊/自走/补写)—— 轮的属性,不重述身份
+                (2026-09 拍板修正:人设 ≠ 轮的属性,见 character/personas.py)
+  3. world:     世界基础信息(时间等动态死信息,每轮现取注入 —— VISION 决策 8)
+  4. state:     当前角色状态(动态 producer,闭包 state —— 状态变了 compose 自动新)
+  5. tool usage:工具用法散文(由 make_usage_section 提供,内核通用)
 
 人格 = prompt 段落 + 状态投影,不是状态机代码。
 """
@@ -85,20 +87,40 @@ def make_state_section(state: CharacterState) -> SystemSection:
     )
 
 
+def make_situation_section(text: str) -> SystemSection:
+    """轮次情境段:这一轮是什么处境(陪聊/自走/补写),紧跟人设段之后。
+
+    2026-09 拍板修正:情境 ≠ 人设。人设常驻(PERSONA 一段),轮只附加
+    自己的情境段 —— 所以这里**不许重述身份**,只写"此刻如何"。
+    文本同样支持 {owner} 之类插值(复用 VALUES)。
+    """
+    return SystemSection(
+        name="situation",
+        priority=12,
+        template=text,
+    )
+
+
 def build_small_night_composer(
-    base: str,
+    persona: str,
     state: CharacterState,
     registry,
+    situation: str | None = None,
     extra_sections: list[SystemSection] | None = None,
     world_now=None,
 ) -> SystemComposer:
-    """小夜子默认 SYSTEM 装配:人设 + 世界 + 状态 + 工具用法(+ 可选扩展段)。
+    """小夜子默认 SYSTEM 装配:常驻人设 + 世界 + 状态 + 工具用法(+ 可选段)。
 
+    persona: 唯一人设文本(PERSONA) —— 三种轮共用同一份,这里只传一份。
+    situation: 轮次情境文本(自走/补写轮传,陪聊可不传),作为独立情境段
+        拼在人设之后;None = 本段不出现。
     extra_sections: 后续能力(RAG 记忆等)从这里挂进来,VISION 的接回点。
     world_now: 世界 section 的时间源(测试/演示注入固定时刻,默认系统时钟)。
     """
     composer = SystemComposer()
-    composer.register(make_persona_section(base))
+    composer.register(make_persona_section(persona))
+    if situation and situation.strip():
+        composer.register(make_situation_section(situation))
     composer.register(make_world_section(world_now))
     composer.register(make_state_section(state))
     composer.register(make_usage_section(registry, priority=_USAGE_PRIORITY))
