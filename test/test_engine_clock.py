@@ -196,6 +196,65 @@ def test_draw_budget_min_within_mix_bounds():
     assert a == b
 
 
+def test_begin_self_wake_no_log_or_empty_log_no_budget():
+    """普通轮预算的锚 = 日志尾:没日志 / 空日志 → 没有可消费区间,预算 0。"""
+    eng._wake_budget["min"] = 77.0
+    eng.begin_self_wake(log=None)
+    assert eng._wake_budget["min"] == 0.0
+    eng.begin_self_wake(log=SessionLog("budget-empty"))
+    assert eng._wake_budget["min"] == 0.0
+
+
+def test_begin_self_wake_anchored_to_log_tail_and_clamped():
+    """普通轮预算 = 对 [日志尾, 当前时刻] 跑同一条 LifeSampler 的结果:
+
+    - 与 LifeSampler 同 seed 采样完全一致(同一事件算法,不是浮空抽数);
+    - 事件被截断:start + 预算 ≤ 当前时刻(采样器内建 end=min(..., t1));
+    - 区间里没事件 → 预算 0([时间预算] 段不出现)。
+    """
+    import random
+    from server.rhythm import LifeSampler
+    t_tail = _epoch(2026, 9, 7, 9, 0)      # 上次交互 09:00
+    now = _epoch(2026, 9, 7, 13, 0)        # 触发本轮的当前时刻 13:00
+    log = SessionLog("wake-anchor")
+    log.append("user/message", at=t_tail, source="user", turn=1,
+               content=[{"type": "text", "text": "在吗"}])
+    log.append("assistant/message", at=t_tail + 5, turn=1,
+               content=[{"type": "text", "text": "在的"}])
+    tail = log.events[-1].time  # 引擎锚 = 日志尾(最后一次交互的末事件)
+    eng._clock_override["ts"] = now
+    try:
+        for seed in range(8):  # 多个 seed:命中与不命中都验
+            expected = LifeSampler(tail, now, rng=random.Random(seed)).sample()
+            eng._wake_budget["min"] = -1.0
+            eng.begin_self_wake(log, rng=random.Random(seed))
+            if not expected:
+                assert eng._wake_budget["min"] == 0.0, seed  # 无事件 → 安静
+            else:
+                last = expected[-1]  # 取距 now 最近那件
+                assert eng._wake_budget["min"] == last.budget_min, seed
+                assert last.end <= now + 1e-6  # 截断:start+预算 ≤ 当前时刻
+    finally:
+        eng._wake_budget["min"] = 0.0
+        eng._clock_override["ts"] = 0.0
+
+
+def test_begin_self_wake_no_window_when_tail_reaches_now():
+    """日志尾 ≥ 当前时刻(刚聊完/时钟没往前走)→ 区间 ≤ 0,该轮无事件,预算 0。"""
+    t = _epoch(2026, 9, 7, 13, 0)
+    log = SessionLog("wake-same")
+    log.append("user/message", at=t, source="user", turn=1,
+               content=[{"type": "text", "text": "hi"}])
+    eng._clock_override["ts"] = t
+    try:
+        eng._wake_budget["min"] = 5.0
+        eng.begin_self_wake(log)
+        assert eng._wake_budget["min"] == 0.0
+    finally:
+        eng._wake_budget["min"] = 0.0
+        eng._clock_override["ts"] = 0.0
+
+
 if __name__ == "__main__":
     test_clock_override_feeds_world_section()
     test_zero_override_means_real_clock()
@@ -206,4 +265,7 @@ if __name__ == "__main__":
     test_wake_budget_section_appears_when_active()
     test_wake_budget_absent_when_zero()
     test_draw_budget_min_within_mix_bounds()
+    test_begin_self_wake_no_log_or_empty_log_no_budget()
+    test_begin_self_wake_anchored_to_log_tail_and_clamped()
+    test_begin_self_wake_no_window_when_tail_reaches_now()
     print("engine_clock all tests passed")

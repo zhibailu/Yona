@@ -306,8 +306,9 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
 
     虚拟时钟(2026-09):非补写回放时,先把引擎世界钟拨到 _vnow()、给 log 盖
     虚拟时间游标 —— 这轮的事件/自语时间戳都落在虚拟时刻,跑完撤掉(引擎回墙钟)。
-    普通自走轮(2 自走 / 情境)也走引擎同款 **时间预算**(begin_self_wake,与
-    心跳/脉冲一致 —— 用户拍板:普通轮与补写同一事件算法);补写回放例外。
+    普通自走轮(2 自走 / 情境)也走引擎同款 **时间预算**(begin_self_wake(log),
+    与心跳/脉冲一致 —— 用户拍板:普通轮与补写同一事件算法,预算锚到日志尾
+    →当前时刻 的可消费区间,不是浮空抽数);补写回放例外。
     """
     log = log if log is not None else _log
     replaying = bool(eng._backfill_clock["ts"])  # 补写回放:游标归调用方管
@@ -315,7 +316,7 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
     if not replaying:
         _apply_clock(log)
     if ordinary_self:
-        eng.begin_self_wake()
+        eng.begin_self_wake(log)
     try:
         tag = {"self": "自走轮", "user": "陪聊轮"}.get(source, source)
         if replaying:

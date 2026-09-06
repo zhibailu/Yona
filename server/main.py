@@ -259,7 +259,7 @@ async def pulse_autonomy():
     sid = engine.life_session_id()
     log = engine._store.load_log(sid)
     t0 = time.time()
-    engine.begin_self_wake()  # 普通自走轮(脉冲)也产时间预算(2026-09 拍板)
+    engine.begin_self_wake(log)  # 普通自走轮(脉冲)时间预算(同补写事件算法,2026-09)
     try:
         with engine._lock:
             # 目标卡快照的人格覆盖(若有)在自走轮同样生效

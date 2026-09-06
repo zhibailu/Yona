@@ -31,7 +31,7 @@ from core.openai_compat import OpenAICompatibleLLM
 from core.session_log import SessionLog
 from core.tools import ToolRegistry
 
-from ..rhythm import LifeSampler, draw_budget_min
+from ..rhythm import LifeSampler
 from ..store import SessionStore
 from .gate import ServerGate
 
@@ -83,13 +83,13 @@ _backfill_clock: dict[str, float] = {"ts": 0.0}
 # 产品路径从不设它(恒 0 = 真实墙钟);与 _backfill_clock 分开:回放轮的世界钟
 # 跟历史游标走(补写),普通轮的"现在"才读这里。
 _clock_override: dict[str, float] = {"ts": 0.0}
-# 普通轮时间预算(2026-09 用户拍板:自走/心跳/脉冲与补写是同一事件算法、同一
-# loop,只是触发点不同 —— 普通轮也应产"这段时间约 X 分钟"的预算)。min>0 时
-# self composer 的 [时间预算] 段报它;触发方跑完要清回 0(end_self_wake)。
-_wake_budget: dict[str, float] = {"min": 0.0}
-# 普通轮时间预算(2026-09 用户拍板:自走/心跳/脉冲与补写同一事件算法,触发点
-# 不同而已 —— 普通轮也产一个"这段时间约 X 分钟"的预算)。min>0 时,self
-# composer 的 [时间预算] 段报它(该轮"只做一件事、别做做不完的事");跑完清零。
+# 普通轮时间预算(2026-09 用户拍板修正:自走/心跳/脉冲 = 与补写**同一事件算法**,
+# 只是触发点不同 —— 普通轮的预算不是浮空抽数,而是对可消费区间
+# [日志尾 = 最后一次交互的时刻, 触发本轮的当前现实时间] 跑同一条 LifeSampler
+# 判定:命中 → 本轮事件(start + 预算,LifeSampler 内建 start+预算 ≤ 当前时刻,
+# 超出即截断 —— LLM 看到的 [时间预算] = 截完的预算);区间内没触发事件 → 0
+# (段不出现,本轮安静结束,无事可叙)。min>0 时 self composer 的 [时间预算]
+# 段报它;触发方跑完要清回 0(end_self_wake)。
 _wake_budget: dict[str, float] = {"min": 0.0}
 _lock = threading.Lock()  # 全局引擎锁(loop 内部已有 turn 锁,这里护 store 落盘)
 # LLM 连接状态(2026-09 任务③ 连接管理):运行时配置的进程内影子 ——
@@ -304,13 +304,14 @@ class LifeLoop:
         sid = life_session_id()
         _live(f"她开始{tag}(卡片 {sid})(source={source})…")
         # 普通自走轮(心跳/脉冲)= 与补写同一个事件算法,只是触发点不同 →
-        # 也产一个"这段时间约 X 分钟"的预算(2026-09 用户拍板)。回放轮另有自己的
-        # 预算 note 且走 cursor,不在这里重复抽。
+        # 触发时对 [日志尾, 当前时刻] 跑同一条 LifeSampler 出时间预算
+        # (2026-09 拍板;细节见 begin_self_wake)。回放轮另有自己的预算 note
+        # 且走 cursor,不在这里重复抽。
         is_self = source == "self"
-        if is_self:
-            begin_self_wake()
         try:
             log = _store.load_log(sid)
+            if is_self:
+                begin_self_wake(log)
             with _lock:
                 # 该卡快照的人格覆盖(若有)在自走轮同样生效
                 snap = _store.get_session_settings(sid)
@@ -338,14 +339,48 @@ def _live(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def begin_self_wake() -> None:
-    """普通自走轮(心跳/脉冲/自走,非回放)开跑前:抽一次时间预算。
+def _log_tail_epoch(log) -> float | None:
+    """日志尾时间(最后一次交互/事件的时刻);空日志 = None。"""
+    if log is None or not log.events:
+        return None
+    return log.events[-1].time
 
-    2026-09 用户拍板:普通轮与补写轮是**同一个事件算法**,只是触发点不同
-    (此刻醒来 vs 离线回放)—— 普通轮也要产一个"这段时间约 X 分钟"的预算,
-    当轮输入里带"只做一件事、别做做不完的事"。抽完由 end_self_wake 清。
+
+def begin_self_wake(log=None, rng=None) -> None:
+    """普通自走轮(心跳/脉冲/自走,非回放)开跑前:对本轮**可消费区间**采样一次。
+
+    2026-09 用户拍板(修正 612ae32"只是浮空抽一个数"的错):普通轮与补写轮是
+    **同一个事件算法**,只是触发点不同(此刻醒来 vs 离线回放)。本轮预算 =
+    同一条 LifeSampler 判定,语义:
+
+      - **可消费区间** = [最后一次交互/事件的时刻(日志尾), 触发本轮的
+        "当前现实时间"(当前时刻)] —— 她离上次互动到现在,这段时间能消费什么;
+      - 在这区间上跑 LifeSampler(逐格点命中 → 事件 start + 预算);
+      - **兜底**:start + 预算 ≤ 当前时刻;LifeSampler 内建 end=min(...) 已截断,
+        即预算超了会被截成 当前时刻−start(她不能"还没到点就做了超出的事");
+      - 命中 → 本轮预算 = 该事件的 budget(截断后,LLM 只看到减后的结果);
+      - 没命中 → 本轮预算 0 = 该轮不触发任何事件,安静结束([时间预算] 段不出现)。
+
+    锚推进:区间里命中过事件,事件结束时刻(start+预算)就是下一轮可消费区间的
+    起点 —— 本轮自走轮跑完会把自语写进日志(时间 = 触发时刻),日志尾自动前移
+    ≥ 事件结束时刻,下一轮锚 = 新日志尾,事件链自动续上;区间里没命中则本轮
+    无事可叙,日志尾不动(下轮从同一锚继续等)。锚不落盘(重启 = 从日志尾)。
+
+    rng 可注入(单测固定复现);引擎默认随机。
     """
-    _wake_budget["min"] = draw_budget_min()
+    _wake_budget["min"] = 0.0
+    tail = _log_tail_epoch(log)
+    if tail is None:
+        return  # 全无历史:没有"最后一次交互",没有可消费区间,无事可叙
+    now = _clock_override["ts"] or time.time()
+    if now <= tail:
+        return  # 时间没往前走(同刻/回拨):区间 ≤ 0,该轮不触发任何事件
+    events = LifeSampler(tail, now, rng=rng).sample()
+    if not events:
+        return  # 该轮不触发任何事件 → 结束(无事可叙,[时间预算] 不出现)
+    # 取窗口里最后一件(距 now 最近、正在做/刚做完的那件);LifeSampler 已把
+    # 每件 end 截到 ≤ now,start+预算 ≤ 当前时刻 内建成立 —— LLM 看到的 = 截完的预算。
+    _wake_budget["min"] = events[-1].budget_min
 
 
 def end_self_wake() -> None:
