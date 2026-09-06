@@ -91,10 +91,11 @@ _clock_override: dict[str, float] = {"ts": 0.0}
 # (段不出现,本轮安静结束,无事可叙)。min>0 时 self composer 的 [时间预算]
 # 段报它;触发方跑完要清回 0(end_self_wake)。
 _wake_budget: dict[str, float] = {"min": 0.0}
-# 命中事件的 start(2026-09 用户拍板:自走轮的 [当前时间] = **事件 start**,
-# 不是触发/注入时刻 —— 一轮 = 一个事件(start,预算),像补写一样锚到事件起点
-# 叙述;[时间线] 也从 start 派生)。begin_self_wake 记下给触发方当轮锚;
-# 0 = 无事件/未激活。end_self_wake 一起清。
+# 命中事件的 start(2026-09 用户拍板范围修正):begin_self_wake 把窗口里命中
+# 那件事件的 start 记在这里,**暴露给要锚定叙述视图的调用方(实验台 prompt_lab:
+# 强制/命中轮把 [当前时间] 拨到事件 start、时间线从它派生)**。产品自走/心跳/
+# 脉冲路径不用它 —— 它们照旧在触发时刻叙述,不改产品输出(锚定试验暂只留
+# lab)。0 = 无事件/未激活;end_self_wake 一起清。
 _wake_anchor: dict[str, float] = {"start": 0.0}
 _lock = threading.Lock()  # 全局引擎锁(loop 内部已有 turn 锁,这里护 store 落盘)
 # LLM 连接状态(2026-09 任务③ 连接管理):运行时配置的进程内影子 ——
@@ -344,20 +345,11 @@ class LifeLoop:
             with _lock:
                 # 该卡快照的人格覆盖(若有)在自走轮同样生效
                 snap = _store.get_session_settings(sid)
-                try:
-                    if is_self:
-                        # 命中事件(预算>0 才走到这):当轮视图锚到事件 ——
-                        # 世界钟 = 事件 start([当前时间]=start,时间线从它派生),
-                        # 游标 = start+预算(自语落事件结束,下一轮锚从这起)。
-                        _anchor_event_view(log)
-                    result = _loop.run_turn(
-                        source=source, tools=tools, log=log, self_note=self_note,
-                        system_prompt=(snap.get("system_prompt")
-                                       if snap.get("system_prompt") else None),
-                    )
-                finally:
-                    if is_self:
-                        _unanchor_event_view(log)
+                result = _loop.run_turn(
+                    source=source, tools=tools, log=log, self_note=self_note,
+                    system_prompt=(snap.get("system_prompt")
+                                   if snap.get("system_prompt") else None),
+                )
                 _store.save_log(sid, log)
             self.gate.mark_self()  # 真跑了一轮 → 进入冷却
             _live(f"{tag}完成,耗时 {time.time() - t0:.1f}s")
@@ -402,15 +394,10 @@ def begin_self_wake(log=None, rng=None) -> float:
 
     **调用方契约**:返回本轮预算(分钟)—— 0 = 该轮不触发任何事件,安静结束:
     不调模型、不写日志、不进冷却(心跳从同一锚继续等下一件);>0 = 有事件可叙,
-    跑这一轮:模型看到的 [当前时间] = **事件 start**(自走轮锚到事件起点叙述,
-    与补写同款,2026-09 拍板;start 存 `_wake_anchor`),[时间线] 从 start 派生,
-    [时间预算] 段必出现(排在 [时间线] 之后)。
-
-    锚推进:本轮事件结束时刻(start+预算)就是下一轮可消费区间的起点 ——
-    触发方应把自语游标拨到事件结束(见 `_anchor_event_view`:世界钟 = start,
-    日志游标 = start+预算),日志尾自动前移到事件结束,下一轮锚 = 新日志尾,
-    事件链自动续上;区间里没命中则本轮无事可叙,日志尾不动(下轮从同一锚
-    继续等)。锚不落盘(重启 = 从日志尾)。
+    跑这一轮。命中事件是否/如何**锚到事件起点叙述**([当前时间] = start、时间线
+    从 start 派生、自语落事件结束)由**调用方**(实验台)决定 —— 本函数只把
+    该事件的 start 记进 `_wake_anchor`,不改产品自走/心跳的输出(产品路径照旧
+    在触发时刻叙述;2026-09 用户拍板:这套事件锚定暂只留在 prompt_lab 试验)。
 
     rng 可注入(单测固定复现);引擎默认随机。
     """
@@ -429,7 +416,7 @@ def begin_self_wake(log=None, rng=None) -> float:
     # 每件 end 截到 ≤ now,start+预算 ≤ 当前时刻 内建成立 —— LLM 看到的 = 截完的预算。
     last = events[-1]
     _wake_budget["min"] = last.budget_min
-    _wake_anchor["start"] = last.start  # 当轮锚:当前时间 = 事件 start
+    _wake_anchor["start"] = last.start  # 暴露给要锚定叙述视图的调用方(实验台)
     return _wake_budget["min"]
 
 
@@ -437,33 +424,6 @@ def end_self_wake() -> None:
     """跑完清掉预算 + 事件锚(0 = 未激活,self composer 的 [时间预算] 段不出现)。"""
     _wake_budget["min"] = 0.0
     _wake_anchor["start"] = 0.0
-
-
-def _anchor_event_view(log) -> None:
-    """命中事件的自走轮开跑前:把**这一轮的视图**锚到事件上。
-
-    - 世界钟(_backfill_clock)拨到事件 start → 模型看到 [当前时间] = 事件
-      起点、[时间线] 从它派生(2026-09 拍板:自走轮当前时间 = 事件 start,
-      不是触发/注入时刻);
-    - 日志时间游标拨到事件结束(start+预算)→ 这轮自语落事件结束时刻,日志
-      尾自动前移 = 事件结束,下一轮可消费区间从它起(拍板锚推进:该 start+
-      时间预算就是下一轮的"最后一次交互的时间刻")。
-
-    必须在引擎锁内设置/清除(补写回放与心跳共用这只钟)。回放判定需要游标
-    且 _backfill_clock 在转 → 本函数满足,事件轮走补写同一视图(情境已合一)。
-    """
-    s = _wake_anchor["start"]
-    b = _wake_budget["min"]
-    if s <= 0 or b <= 0:
-        return
-    _backfill_clock["ts"] = s
-    log.set_time_cursor(s + b * 60.0)
-
-
-def _unanchor_event_view(log) -> None:
-    """跑完撤掉事件视图(引擎回墙钟,游标清掉)。"""
-    log.clear_time_cursor()
-    _backfill_clock["ts"] = 0.0
 
 
 def _human_gap(seconds: float) -> str:

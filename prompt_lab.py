@@ -461,8 +461,9 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
                              (clock_ts - s) / 60.0)
             eng._wake_budget["min"] = budget_min
             anchor_s, anchor_b = s, budget_min
-        # 事件轮锚定(自然命中或强制):世界钟 = start、自语游标 = start+预算
-        # (这轮自语落事件结束,下一轮锚从这起;和引擎 _anchor_event_view 同款)。
+        # 事件轮锚定(自然命中或强制,纯 lab):世界钟 = start、自语游标 =
+        # start+预算(这轮自语落事件结束,下一轮锚从这起)。产品心跳/脉冲不
+        # 这么做(2026-09 用户拍板:锚定试验只留 lab)。
         if ordinary_self and not replaying and anchor_s > 0:
             eng._clock_override["ts"] = anchor_s
             log.set_time_cursor(anchor_s + anchor_b * 60.0)

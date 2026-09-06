@@ -320,8 +320,9 @@ def test_event_view_anchored_at_event_start():
         got = eng.begin_self_wake(log, rng=random.Random(seed))
         assert got > 0
         s = eng._wake_anchor["start"]
-        # 触发方锚定(引擎/lab 同款):世界钟 = start,游标 = start+预算
-        eng._backfill_clock["ts"] = s
+        # lab 命中事件轮锚定(纯 lab,2026-09 用户拍板:产品心跳/脉冲不做):
+        # 世界钟 override = start、自语游标 = start+预算。
+        eng._clock_override["ts"] = s
         log.set_time_cursor(s + got * 60.0)
         try:
             sections = eng.system_component_sections("self", log)
@@ -335,7 +336,7 @@ def test_event_view_anchored_at_event_start():
             assert wb, sections  # 有事件必带 [时间预算]
         finally:
             log.clear_time_cursor()
-            eng._backfill_clock["ts"] = 0.0
+            eng._clock_override["ts"] = 0.0
     finally:
         eng._wake_budget["min"] = 0.0
         eng._wake_anchor["start"] = 0.0
