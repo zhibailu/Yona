@@ -236,7 +236,9 @@ def test_begin_self_wake_anchored_to_log_tail_and_clamped():
     - 事件被截断:start + 预算 ≤ 当前时刻(采样器内建 end=min(..., t1));
     - 区间里没事件 → 预算 0([时间预算] 段不出现);
     - 返回值 = 本轮预算(0 = 该轮不触发任何事件 → 调用方安静结束不调 LLM,
-      2026-09 拍板;>0 = 有事件可叙,跑这一轮)。
+      2026-09 拍板;>0 = 有事件可叙,跑这一轮);
+    - 命中时 `_wake_anchor["start"]` = 该事件 start(2026-09 拍板:自走轮的
+      [当前时间] = 事件 start,不是触发/注入时刻);end_self_wake 一起清。
     """
     import random
     from server.rhythm import LifeSampler
@@ -253,16 +255,26 @@ def test_begin_self_wake_anchored_to_log_tail_and_clamped():
         for seed in range(8):  # 多个 seed:命中与不命中都验
             expected = LifeSampler(tail, now, rng=random.Random(seed)).sample()
             eng._wake_budget["min"] = -1.0
+            eng._wake_anchor["start"] = -1.0
             got = eng.begin_self_wake(log, rng=random.Random(seed))
             assert got == eng._wake_budget["min"], seed  # 返回即生效预算
             if not expected:
                 assert got == 0.0, seed  # 无事件 → 0 → 安静结束(不调 LLM)
+                assert eng._wake_anchor["start"] == 0.0, seed
             else:
                 last = expected[-1]  # 取距 now 最近那件
                 assert got == last.budget_min, seed
                 assert last.end <= now + 1e-6  # 截断:start+预算 ≤ 当前时刻
+                assert eng._wake_anchor["start"] == last.start, seed
+        # end_self_wake 把预算与事件锚一起清掉
+        eng.begin_self_wake(log, rng=random.Random(6))
+        assert eng._wake_budget["min"] > 0 and eng._wake_anchor["start"] > 0
+        eng.end_self_wake()
+        assert eng._wake_budget["min"] == 0.0
+        assert eng._wake_anchor["start"] == 0.0
     finally:
         eng._wake_budget["min"] = 0.0
+        eng._wake_anchor["start"] = 0.0
         eng._clock_override["ts"] = 0.0
 
 
@@ -282,6 +294,54 @@ def test_begin_self_wake_no_window_when_tail_reaches_now():
         eng._clock_override["ts"] = 0.0
 
 
+def test_event_view_anchored_at_event_start():
+    """事件轮的 [当前时间] = 事件 start,时间线从它派生(2026-09 拍板)。
+
+    复现 lab 强制场景:上次交互 09:01,注入 +4h(= 触发时刻 13:01),窗口命中
+    一件(start s,预算 b)。触发方把世界钟拨到 s、游标拨到 s+b 后,模型看到的:
+      [当前时间] = s(不是 13:01)
+      [时间线] 距上次和主人说话 = s − 09:01(不是整段"4 小时前")
+      [时间预算] 该事件的预算
+    """
+    import random
+    import time as _time
+    from server.rhythm import LifeSampler
+    t_tail = _epoch(2026, 9, 7, 9, 1)
+    now = _epoch(2026, 9, 7, 13, 1)
+    log = SessionLog("view-anchor")
+    log.append("user/message", at=t_tail, source="user", turn=1,
+               content=[{"type": "text", "text": "hi"}])
+    log.append("assistant/message", at=t_tail + 5, turn=1,
+               content=[{"type": "text", "text": "hey"}])
+    eng._clock_override["ts"] = now
+    seed = next(i for i in range(200) if LifeSampler(
+        log.events[-1].time, now, rng=random.Random(i)).sample())
+    try:
+        got = eng.begin_self_wake(log, rng=random.Random(seed))
+        assert got > 0
+        s = eng._wake_anchor["start"]
+        # 触发方锚定(引擎/lab 同款):世界钟 = start,游标 = start+预算
+        eng._backfill_clock["ts"] = s
+        log.set_time_cursor(s + got * 60.0)
+        try:
+            sections = eng.system_component_sections("self", log)
+            world = _world_text(sections)
+            fmt_s = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(s))
+            assert f"[当前时间] {fmt_s}" in world, (world, fmt_s)
+            tl = [t for n, t in sections if n == "timeline"]
+            assert tl and "距上次和主人说话:" in tl[0], sections
+            assert "4 小时前" not in tl[0], tl  # 不是整段空窗,从 start 派生
+            wb = [t for n, t in sections if n == "wake_budget"]
+            assert wb, sections  # 有事件必带 [时间预算]
+        finally:
+            log.clear_time_cursor()
+            eng._backfill_clock["ts"] = 0.0
+    finally:
+        eng._wake_budget["min"] = 0.0
+        eng._wake_anchor["start"] = 0.0
+        eng._clock_override["ts"] = 0.0
+
+
 if __name__ == "__main__":
     test_clock_override_feeds_world_section()
     test_zero_override_means_real_clock()
@@ -296,4 +356,5 @@ if __name__ == "__main__":
     test_begin_self_wake_no_log_or_empty_log_no_budget()
     test_begin_self_wake_anchored_to_log_tail_and_clamped()
     test_begin_self_wake_no_window_when_tail_reaches_now()
+    test_event_view_anchored_at_event_start()
     print("engine_clock all tests passed")

@@ -21,9 +21,12 @@
 - **自走轮手动触发**:按键即"心跳此刻醒来";回车 = 无情境(引擎纯心跳
   占位),输入一句话 = 情境自走。纯醒来(回车)那轮先按拍板语义采样判定:
   窗口无事件 → **加深一级问"是否强制触发"**(2026-09 拍板)—— 选 y:窗口内
-  随机选区作事件 start + 抽预算(同款时长分布,兜底截断 ≤ 当前时刻),填进
-  `_wake_budget` 后按命中轮跑([时间预算] 必接在 [时间线] 后);回车:安静
-  结束,不调 LLM(打印判定与窗口,一眼看到为什么)。情境自走不 gate。
+  随机选区作事件 start(随机数①)+ 抽预算(随机数②,同款时长分布,兜底截断
+  ≤ 当前时刻),按命中轮跑;回车:安静结束,不调 LLM(打印判定与窗口)。
+  **事件轮的 [当前时间] = 事件 start**(2026-09 拍板):命中(自然/强制)就把
+  世界钟拨到事件起点 —— 模型看到 [当前时间]=start、[时间线] 从 start 派生
+  (不再是整段空窗的"+4h 前"),自语落事件结束时刻(start+预算,下一轮锚从
+  这起)。情境自走不 gate。
 - **虚拟时钟 = 可注入间隔/时刻(2026-09 用户三提后拍板玩法)**:每次运行/
   清空,时钟锚到今天上午 9 点;跑自走轮(2)前先打印参照 = 日志里最近
   一轮/事件的末时间,再输入你决定的假冒时间(如 23:30 / +2h / 09-08 09:00),
@@ -387,28 +390,42 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
     **无事件自走轮 = 安静结束,不调 LLM**(2026-09 拍板):纯醒来(回车无情境)
     时 begin_self_wake 返回 0 = 窗口 [日志尾 → 当前] 采样判定无事件 → 该轮
     不触发任何事件;lab 在这里**加深一级**(用户拍板):问是否强制触发 ——
-    选 y → 窗口内随机选区作事件 start + 抽预算(同款时长分布,兜底截断
-    start+预算 ≤ 当前),`_wake_budget` 填进去,按命中轮跑(带 [时间预算]);
-    回车 → 安静结束,不调模型。情境自走(显式 self_note)= 人工指定情境的
-    测试轮,不 gate,照跑。
+    选 y → 窗口内随机选区作事件 start + 抽预算(两个随机数,同款时长分布,
+    兜底截断 start+预算 ≤ 当前),填 `_wake_budget` 后按命中轮跑;回车 →
+    安静结束,不调模型。情境自走(显式 self_note)= 人工指定情境的测试轮,
+    不 gate,照跑。
+    **事件轮的当前时间 = 事件 start(2026-09 拍板)**:命中(自然/强制)的自走
+    轮把世界钟拨到事件 start —— 模型看到的 [当前时间] = 事件起点(不是注入
+    的 +4h 那种"现在"),[时间线] 从 start 派生,不再是整段空窗;本轮自语落
+    事件结束时刻(start+预算,锚推进,下一轮窗口从这起)。
     """
     log = log if log is not None else _log
     replaying = bool(eng._backfill_clock["ts"])  # 补写回放:游标归调用方管
     ordinary_self = source == "self" and not replaying
     quiet_skip = False
+    # 事件轮锚:start + 预算(自然命中由 begin_self_wake 记;强制由下方现场抽)
+    anchor_s = 0.0
+    anchor_b = 0.0
     if not replaying:
         _apply_clock(log)
     if ordinary_self:
         # 2026-09 拍板落地:无事件的自走轮**安静结束,不调 LLM** —— 只有
         # begin_self_wake 判定命中事件(预算 > 0)才跑,跑了必有 [时间预算]。
         # 情境自走(显式 self_note)= 人工指定情境的测试轮,不 gate(照跑)。
-        quiet_skip = self_note is None and eng.begin_self_wake(log) <= 0
+        budget = eng.begin_self_wake(log)
+        anchor_s = eng._wake_anchor["start"]
+        anchor_b = budget
+        quiet_skip = self_note is None and budget <= 0
     try:
         tag = {"self": "自走轮", "user": "陪聊轮"}.get(source, source)
         if replaying:
             clock_ts, clock_tag = eng._backfill_clock["ts"], "回放"
         else:
             clock_ts, clock_tag = _vnow(), ("虚拟" if _clock_offset else "真实")
+        # 事件轮的 [当前时间] = 事件 start(2026-09 拍板):世界钟拨到 start,
+        # [时间线] 从它派生(不再是整段空窗的"4 小时前")。
+        if ordinary_self and not replaying and not quiet_skip and anchor_s > 0:
+            clock_ts, clock_tag = anchor_s, "事件start"
         print(f"\n===== {tag} · {_model or '(默认)'} · {clock_tag}时钟 "
               f"{_fmt_ts(clock_ts)} · 前缀={_effective_prefix() or '(空)'} =====")
         if quiet_skip:
@@ -416,7 +433,8 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
             print(f"── 采样判定 [{_fmt_ts(tail) if tail else '—'} → "
                   f"{_fmt_ts(clock_ts)}] 无事件 → 该轮不触发任何事件 ──")
             # 更深一级(2026-09 用户拍板):要不要**强制触发**?要 → 窗口内
-            # 随机选区作事件 start + 抽一个预算(同款时长分布),按命中轮跑。
+            # 随机选区作事件 start(一个随机数)+ 抽预算(另一个随机数),
+            # 按命中轮跑 —— 两个数都会落在当轮视图里。
             try:
                 force = input("  强制触发自走事件?(y = 窗口内随机 start + 抽预算,"
                               "然后跑这轮; 回车 = 安静结束): ").strip().lower()
@@ -434,17 +452,23 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
                 print(f"  窗口不足最短事件({MIN_EVENT_SEC / 60:.0f} 分钟),"
                       "放不下一个事件,安静结束。")
                 return
-            # 强制事件 = 区间 [日志尾, 当前] 内均匀随机一个点作 start,
-            # 预算 = 抽数(与 LifeSampler 同一时长分布),再走**兜底截断**
-            # start+预算 ≤ 当前时刻(和引擎命中轮同一把尺,不破坏语义)。
+            # 强制事件 = ① 区间 [日志尾, 当前] 内均匀随机一个点作 start;
+            # ② 预算 = 另抽一个数(与 LifeSampler 同一时长分布),再走**兜底
+            # 截断** start+预算 ≤ 当前时刻(和引擎命中轮同一把尺)。
             rng = random.Random()
             s = rng.uniform(tail, clock_ts - MIN_EVENT_SEC)
             budget_min = min(draw_budget_min(rng=rng),
                              (clock_ts - s) / 60.0)
             eng._wake_budget["min"] = budget_min
-            print(f"  → 强制事件:start={_fmt_ts(s)} · 预算约 {budget_min:.0f} 分钟"
-                  f"(窗口内随机区 {_fmt_ts(tail)} → {_fmt_ts(clock_ts)} 抽的)"
-                  " —— 下面按命中轮跑,该轮带 [时间预算]")
+            anchor_s, anchor_b = s, budget_min
+        # 事件轮锚定(自然命中或强制):世界钟 = start、自语游标 = start+预算
+        # (这轮自语落事件结束,下一轮锚从这起;和引擎 _anchor_event_view 同款)。
+        if ordinary_self and not replaying and anchor_s > 0:
+            eng._clock_override["ts"] = anchor_s
+            log.set_time_cursor(anchor_s + anchor_b * 60.0)
+            print(f"── 事件锚:start={_fmt_ts(anchor_s)} · 预算约 {anchor_b:.0f} 分钟"
+                  f"(结束 {_fmt_ts(anchor_s + anchor_b * 60.0)},自语落这里;"
+                  "下一轮窗口从这起)──")
         console_cb = _make_console_cb(log)
 
         # 包一层 llm 代理:每次真实 LLM 调用前打印组件拆分 + 实际 messages

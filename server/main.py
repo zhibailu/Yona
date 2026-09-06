@@ -270,11 +270,18 @@ async def pulse_autonomy():
         with engine._lock:
             # 目标卡快照的人格覆盖(若有)在自走轮同样生效
             snap = engine._store.get_session_settings(sid)
-            engine._loop.run_turn(
-                source="self", log=log,
-                system_prompt=(snap.get("system_prompt")
-                               if snap.get("system_prompt") else None),
-            )
+            try:
+                # 命中事件(预算>0 才走到这):当轮视图锚到事件 —— 世界钟 =
+                # 事件 start([当前时间]=start,时间线从它派生),游标 = start+
+                # 预算(自语落事件结束,下一轮锚从这起)。
+                engine._anchor_event_view(log)
+                engine._loop.run_turn(
+                    source="self", log=log,
+                    system_prompt=(snap.get("system_prompt")
+                                   if snap.get("system_prompt") else None),
+                )
+            finally:
+                engine._unanchor_event_view(log)
             engine._store.save_log(sid, log)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
