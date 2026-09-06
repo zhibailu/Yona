@@ -100,11 +100,11 @@ yona-rewrite/
 
 | UI 文件 | 真能力 | 空壳/占位 |
 |---|---|---|
-| app-core.js | 主聊天逻辑、设置、会话切换 | 模型"自动发现"按钮(发现可用,选中不生效,见 MAP 待拍) |
+| app-core.js | 主聊天逻辑、设置(真接线)、会话切换、连接管理(模型下拉/向导) | — |
 | app-messages.js | 消息渲染 + busy 帧提示(已加 rewrite 分支) | — |
 | app-sessions.js | 会话管理(真) | — |
 | app-presets.js | **agent-feed 内心活动面板(rewrite 核心展示)** + 预设 CRUD(2026-09 真存盘) | 预设尚未作用于运行时(等"快照整合"架构,见 MAP) |
-| app-objects-sensory.js | **workspace 桌面(动作轨迹/自语/脉冲)** | 感官按钮(发图/语音/朗读 → 无后端,点空) |
+| app-objects-sensory.js | **workspace 桌面(动作轨迹/自语/脉冲)** | 感官(发图/语音/朗读)+物件舞台:后端无端点/恒空,UI 入口已撤(2026-09 任务4/5),代码尸体标注冻结区,感官接回时复用 |
 | app-media-debug.js | **LLM 输入输出调试(已接真日志:engine._TracingLLM 环形缓冲,折叠不空轮询;2026-09 起每调用带 token 用量与截断标记)** | — |
 | app-admin.js | — | 已剪:stats/rebuild-vector/export/clean-empty 四按钮 404,移 `static/_unused/` |
 

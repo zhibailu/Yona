@@ -24,9 +24,7 @@
             }
             _loadSessionImages();
             _refreshObjects();
-            const speakBtn = document.getElementById('speak-btn');
-            if (speakBtn) speakBtn.classList.toggle('active', _voiceOutputEnabled);
-            if (_voiceOutputEnabled) _warmupVoiceOutput(false);
+            // 2026-09 任务4:speak/voice 开关已撤(无后端),onload 不再读它
             setupInput();
         };
 

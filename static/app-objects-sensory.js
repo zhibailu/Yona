@@ -1,3 +1,10 @@
+        // ========== app-objects-sensory.js —— 冻结区说明(2026-09)==========
+        // 本文件三段拼成,只有第一段还活着:
+        // 1) 桌面/行动舞台(活):/workspace 动作轨迹 + 脉冲 + 内心面板;
+        // 2) 感官 视觉/语音/朗读(冻结):后端无 /sensory/* 端点,UI 入口已于
+        //    2026-09 任务4 撤掉(按钮/粘贴/拖图/朗读),代码尸体留在原地防盲切,
+        //    感官接回(旧 D:\MyProject\Yona\src\sensory)时原样复用;
+        // 3) 物件舞台(冻结):/objects 恒空,UI 桌面物件 pane 已删(任务5)。
         // ========== Yona 桌面物件 / 行动舞台 ==========
         let _knownObjectIds = new Set();
         let _announcedObjectIds = new Set();
@@ -210,7 +217,7 @@
         let _audioChunks = [];
         let _speechHadResult = false;
         let _speechHadError = false;
-        let _voiceOutputEnabled = localStorage.getItem('yona_voice_output') === '1';
+        let _voiceOutputEnabled = false;  // 2026-09 感官冻结:朗读无后端,强制关(旧 localStorage 记忆作废)
         let _speechQueue = [];
         let _speechBuffer = '';
         let _speechDraining = false;

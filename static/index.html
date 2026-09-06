@@ -75,33 +75,9 @@
                     <div class="stage-label"><i data-lucide="sparkles"></i> 此刻</div>
                     <div class="stage-status" id="stage-status">她还没有伸手做什么。</div>
                 </div>
-                <div class="stage-pane">
-                    <div class="stage-label"><i data-lucide="hand"></i> 刚放到桌面</div>
-                    <div class="stage-focus" id="stage-focus">
-                        <div class="stage-token"><i data-lucide="circle-dot" style="width:16px;height:16px"></i></div>
-                        <div style="min-width:0;flex:1">
-                            <div class="stage-title" id="stage-title">桌面是空的</div>
-                            <div class="stage-copy" id="stage-copy">等她真正留下东西，这里会直接亮出来。</div>
-                            <div class="stage-actions">
-                                <button id="stage-open-document" onclick="openStageDocument()" title="打开文档" style="display:none">
-                                    <i data-lucide="file-text" style="width:12px;height:12px"></i>
-                                </button>
-                                <button onclick="continueStageObject()">继续这个</button>
-                                <button id="stage-correct-object" onclick="openStageCorrection()">更正</button>
-                                <button onclick="showStageSource()">来源</button>
-                                <button onclick="deleteStageObject()">收走</button>
-                            </div>
-                            <div class="stage-correction" id="stage-correction">
-                                <input id="stage-correction-title" maxlength="120" aria-label="标题">
-                                <textarea id="stage-correction-content" maxlength="2400" aria-label="内容"></textarea>
-                                <div class="stage-correction-actions">
-                                    <button onclick="saveStageCorrection()">保存更正</button>
-                                    <button onclick="closeStageCorrection()">取消</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <!-- 2026-09 任务5:旧"刚放到桌面/物件"pane 已删(objects 后端恒空,
+                     该块是死 UI —— 继续/更正/收走/来源全无落点;代码尸体留在
+                     app-objects-sensory.js 冻结区,见 STRUCTURE.md §4) -->
                 <div class="stage-pane">
                     <div class="stage-label"><i data-lucide="route"></i> 轨迹</div>
                     <div class="stage-trace" id="stage-trace">下一次她产生动作时，我会在这里标出来。</div>
@@ -124,34 +100,9 @@
             <!-- 右键菜单 -->
             <div class="ctx-menu" id="ctx-menu"></div>
             <div class="input-area">
-                <div class="sensory-strip" id="sensory-strip">
-                    <img class="sensory-thumb" id="sensory-thumb" alt="">
-                    <div class="sensory-text" id="sensory-text"></div>
-                    <div class="sensory-actions">
-                        <button class="sensory-btn" onclick="clearVisionAttachment()" title="移除画面">
-                            <i data-lucide="x" style="width:16px;height:16px"></i>
-                        </button>
-                    </div>
-                </div>
-                <div class="input-actions">
-                    <button id="action-menu-btn" onclick="toggleActionMenu()" title="更多操作">
-                        <i data-lucide="ellipsis" style="width:18px;height:18px"></i>
-                    </button>
-                    <div id="action-menu" class="dropdown-menu" style="display:none">
-                        <!-- 2026-09:旧系统的 统计/重建向量库/导出/清理 四个按钮后端不存在,
-                            已随 app-admin.js 移入 static/_unused/(见 STRUCTURE.md §4)。
-                            未来接回能力时再放回。 -->
-                    </div>
-                </div>
-                <button class="sensory-btn" id="vision-btn" onclick="pickImage('vision')" title="给她看一张图">
-                    <i data-lucide="eye" style="width:18px;height:18px"></i>
-                </button>
-                <button class="sensory-btn" id="voice-btn" onclick="toggleVoiceInput()" title="语音输入">
-                    <i data-lucide="mic" style="width:18px;height:18px"></i>
-                </button>
-                <button class="sensory-btn" id="speak-btn" onclick="toggleVoiceOutput()" title="朗读回复">
-                    <i data-lucide="volume-2" style="width:18px;height:18px"></i>
-                </button>
+                <!-- 2026-09 任务4:感官条(视觉/语音/朗读)与空壳 action 菜单已删 ——
+                     后端无 sensory 端点、/objects 恒空,按钮只会点了没反应;
+                     代码尸体留在 app-objects-sensory.js 冻结区(见 STRUCTURE.md §4) -->
                 <textarea id="input-box" rows="1" placeholder="想说点什么... (Enter 发送, Shift+Enter 换行)"></textarea>
                 <button id="send-btn" onclick="sendMessage()">发送</button>
             </div>

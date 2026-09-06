@@ -297,14 +297,8 @@
                 input.style.height = 'auto';
                 input.style.height = Math.min(input.scrollHeight, 120) + 'px';
             });
-            input.addEventListener('paste', handleVisionPaste);
-            [inputArea, chatArea].forEach(target => {
-                if (!target) return;
-                target.addEventListener('dragenter', handleVisionDragEnter);
-                target.addEventListener('dragover', handleVisionDragOver);
-                target.addEventListener('dragleave', handleVisionDragLeave);
-                target.addEventListener('drop', handleVisionDrop);
-            });
+        // 2026-09 任务4:视觉粘贴/拖图通道已撤(后端无 sensory,通道只会造
+        // 假附件);见 app-objects-sensory.js 冻结区
         }
 
         let _sendCount = 0;
@@ -320,8 +314,8 @@
             }
             const input = document.getElementById('input-box');
             const baseText = overrideText || input.value.trim();
-            const sensoryPayload = overrideSensory || _sensoryPayload();
-            if ((!baseText && !sensoryPayload) || isSending || !currentSessionId) {
+            // 2026-09 任务4:感官附件/语音已撤 —— 没有"发图/语音"这回事了
+            if (!baseText || isSending || !currentSessionId) {
                 document.getElementById('status-text').textContent = countId + ' BLOCKED';
                 return;
             }
@@ -330,17 +324,15 @@
             if (!overrideText) input.value = '';
             input.style.height = 'auto';
             setStatus('小夜子正在思考...');
-            const objectIdsBefore = new Set(_knownObjectIds);
             _setStageStatus('她接过你的话，正在判断要不要动手。', 'thinking');
             const btn = document.getElementById('send-btn');
             btn.disabled = true;
 
-            const userDiv = appendMessage('user', baseText || '给你看这个。', null, sensoryPayload);
+            const userDiv = appendMessage('user', baseText);
             showTyping();
 
             const settings = getSettings();
             let aiDiv = null;
-            _beginStreamingSpeech();
 
             try {
                 const res = await fetch(`${API}/chat/stream`, {
@@ -349,7 +341,6 @@
                     body: JSON.stringify({
                         session_id: currentSessionId,
                         message: baseText,
-                        sensory: sensoryPayload,
                         model: settings.model,
                         temperature: settings.temperature,
                         system_prompt: settings.system_prompt,
@@ -406,7 +397,6 @@
                                     if (contentEl) contentEl.style.opacity = '1';
                                 }
                                 fullText += data.token;
-                                _queueStreamingSpeech(data.token);
                                 const contentEl = aiDiv.querySelector('.msg-bubble .msg-content');
                                 if (contentEl) contentEl.textContent = fullText;
                                 const container = document.getElementById('messages');
@@ -423,9 +413,9 @@
                                     _injectMsgActions(ab, 'assistant');
                                 }
                                 lucide.createIcons();
-                                _markObjectsPending();
-                                _setStageStatus('她说完了，正在把能留下的东西放到桌面上。', 'acting');
-                                _watchForNewObject(objectIdsBefore);
+                                // 2026-09 任务4/5:物件舞台已删 —— done 后只刷新
+                                // 动作轨迹/内心,不再 _markObjectsPending/_watchForNewObject
+                                _setStageStatus('她说完了。', 'done');
                                 setTimeout(_refreshWorkspace, 900);
                             } else if (data.error) {
                                 throw new Error(data.error);
@@ -437,8 +427,8 @@
                 }
 
                 if (!fullText) throw new Error('LLM 返回空响应');
-                _flushStreamingSpeech();
-                clearSensoryAttachments();
+                // 2026-09 任务4:语音/感官附件钩子已撤(_flushStreamingSpeech /
+                // clearSensoryAttachments 随按钮删除一并断掉)
                 setStatus(`${settings.model} · T=${settings.temperature}`);
 
             } catch (e) {
