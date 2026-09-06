@@ -11,11 +11,8 @@
     3. 之后只用 `eng._loop.run_turn(...)` / `eng.system_component_sections(...)`
   实验台看到的 system、历史、前缀、llm 调用 = 引擎真实路径,llm-log 也照记。
 - **会话不落盘**:聊天日志用进程内 SessionLog(退出即弃,不写 data/)。
-- **每次真实 LLM 调用前打印**(on_input 钩子,2026-09):SYSTEM 组件拆分
-  (persona/situation/world/state/tool_usages,来自引擎真实 composer)+ 完整
-  messages —— **一轮里调几次 LLM 就打印几次**(调工具后下一步的输入带
-  tool/result,和上一步不一样,逐次打);随后流式打印输出,工具执行
-  (参数/返回)按日志顺序补打,一眼看清每次调用分别喂了什么、干了什么。
+- 每次真实调用前打印 **SYSTEM 组件拆分**(persona/situation/world/state/
+  tool_usages,来自引擎真实 composer)+ 完整 messages;调用后流式打印输出。
 - **自走轮手动触发**:按键即"心跳此刻醒来";回车 = 无情境(引擎纯心跳
   占位),输入一句话 = 情境自走。
 - **虚拟时钟 = 可注入间隔/时刻(2026-09 用户三提后拍板玩法)**:每次运行/
@@ -316,7 +313,10 @@ def _make_console_cb(log):
                 continue
             shown_upto = e.seq
             t = e.type
-            if t == "tool/call":
+            if t == "step/start":
+                step = e.data.get("step")
+                print(f"\n── 第 {step} 次 LLM 调用 ──", flush=True)
+            elif t == "tool/call":
                 name = e.data.get("name", "")
                 args = e.data.get("arguments", "")
                 print(f"  ⚙ [tool] {name} {args}".rstrip(), flush=True)
@@ -363,23 +363,18 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
             clock_ts, clock_tag = _vnow(), ("虚拟" if _clock_offset else "真实")
         print(f"\n===== {tag} · {_model or '(默认)'} · {clock_tag}时钟 "
               f"{_fmt_ts(clock_ts)} · 前缀={_effective_prefix() or '(空)'} =====")
+        try:
+            msgs = _build_messages(source, log)
+        except Exception as exc:  # noqa: BLE001
+            msgs = []
+            print(f"(预览失败:{exc})")
+        print_messages(msgs, source, log)
+        print("────── 输出 ──────")
         console_cb = _make_console_cb(log)
-
-        def on_input(turn, step, messages) -> None:
-            """每次真实 LLM 调用前:先带出上一步的工具执行,再打本轮输入。
-
-            调工具后下一步的输入(历史含 tool/result)和上一步不一样 ——
-            逐次打,一次调用 = 一组"组件拆分 + 实际发送的 messages"。
-            """
-            console_cb.flush()  # 上一步的工具参数/返回先落地(在下一步输入前)
-            print(f"\n──── 第 {step} 次 LLM 调用 · 输入 ────")
-            print_messages(messages, source, log)
-            print("────── 输出 ──────")
-
         try:
             result = eng._loop.run_turn(
                 user_input=user_input, source=source, log=log,
-                self_note=self_note, on_chunk=console_cb, on_input=on_input,
+                self_note=self_note, on_chunk=console_cb,
                 model=(_model or None), max_rounds=_max_rounds,
             )
             console_cb.flush()  # 兜底:最后一步的工具内容若没被文字带到,这里补上

@@ -89,37 +89,6 @@ def test_quick_answer_no_tools():
     assert "tool/call" not in types
 
 
-def test_on_input_fires_per_real_llm_call():
-    """on_input 钩子:每次真实 LLM 调用前触发一次,输入各不相同。
-
-    调工具后第二步的输入带着 tool/result(和第一步不一样)—— 实验台据此
-    逐次打印"组件拆分 + 实际发送的 messages"。
-    """
-    seen: list[tuple[int, list[dict]]] = []
-
-    def hook(turn, step, messages):
-        seen.append((step, [dict(m) for m in messages]))
-
-    log, tools, llm, loop = build_env(
-        [
-            AssistantOutput(
-                tool_calls=[ToolCall(id="c1", name="web_search", arguments='{"query": "x"}')],
-            ),
-            AssistantOutput(text="答好了"),
-        ]
-    )
-    result = loop.run_turn("查天气", on_input=hook)
-    assert result.steps == 2
-    # 一次真实 LLM 调用 = 一次 on_input(两步 = 两次)
-    assert [s for s, _ in seen] == [1, 2], seen
-    # 两次输入不同:第 1 步无 tool 消息,第 2 步带了 tool/result
-    roles1 = [m["role"] for m in seen[0][1]]
-    roles2 = [m["role"] for m in seen[1][1]]
-    assert "tool" not in roles1, roles1
-    assert roles2[-1] == "tool", roles2
-    assert "晴天" in seen[1][1][-1]["content"][0]["text"]
-
-
 def test_max_steps_guard():
     """模型死循环调工具 -> max_steps 兜底,reason=max-steps。"""
     log, tools, llm, loop = build_env(
@@ -396,7 +365,6 @@ def test_parse_usage_normalizes_deepseek_and_openai():
 if __name__ == "__main__":
     test_full_turn_with_tools()
     test_quick_answer_no_tools()
-    test_on_input_fires_per_real_llm_call()
     test_max_steps_guard()
     test_out_of_whitelist_tool_call_is_silently_dropped()
     test_max_tokens_empty_message_not_logged()
