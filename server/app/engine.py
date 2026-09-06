@@ -20,14 +20,8 @@ from pathlib import Path
 from .llm_setup import load_runtime
 
 from character.persona import build_small_night_composer
-from character.personas import (  # noqa: E402  人格文案(内容层),见文件头
-    BACKFILL_SITUATION,
-    CHAT_SITUATION,
-    PERSONA,
-    SELF_SITUATION,
-    SELF_TALK_PREFIX,
-    VALUES,
-)
+from character import personas as personas_mod  # noqa: E402 文案(内容层);装配时现取属性,
+# 不用 from-import 绑死 —— 改文案后 reload 模块 + 重建引擎即生效(2026-09)
 from character.state import CharacterState
 from character.tools import make_change_outfit_tool
 from core.heartbeat import Heartbeat
@@ -372,24 +366,32 @@ def _build_engine(cfg: dict | None = None) -> None:
     )
     # 一份 PERSONA 常驻,三种轮只换"情境段"(2026-09 拍板修正:
     # 人设 ≠ 轮的属性 —— 陪聊/自走/补写是同一个她,不是三个人)。
+    # 文案现取 personas_mod.*:改文案后 reload + 重建引擎即生效。
     chat_composer = build_small_night_composer(
-        PERSONA, _state, _tools, situation=CHAT_SITUATION)
+        personas_mod.PERSONA, _state, _tools,
+        situation=personas_mod.CHAT_SITUATION)
     self_composer = build_small_night_composer(
-        PERSONA, _state, _tools, situation=SELF_SITUATION)
+        personas_mod.PERSONA, _state, _tools,
+        situation=personas_mod.SELF_SITUATION)
     # 补写回放轮:世界时间 = log 的时间游标(历史时刻),不是墙钟
     backfill_composer = build_small_night_composer(
-        PERSONA, _state, _tools,
-        situation=BACKFILL_SITUATION,
+        personas_mod.PERSONA, _state, _tools,
+        situation=personas_mod.BACKFILL_SITUATION,
         world_now=lambda: time.localtime(_backfill_clock["ts"]),
     )
+    # 暴露给调试/实验台只读查询(不改产品路径:compose 仍在 sys_by_source 里做)
+    _composers["chat"] = chat_composer
+    _composers["self"] = self_composer
+    _composers["backfill"] = backfill_composer
 
     def sys_by_source(registry, source, log=None):
         # 三参 builder:回放轮(log 设了时间游标)用补写视图 —— 世界时间=游标,
         # 人格=正在过普通一天的她;普通轮按 source 用实时视图(墙钟)。
         if log is not None and log.time_cursor is not None:
-            return backfill_composer.compose({**VALUES, "registry": registry})
+            return backfill_composer.compose(
+                {**personas_mod.VALUES, "registry": registry})
         composer = self_composer if source == "self" else chat_composer
-        return composer.compose({**VALUES, "registry": registry})
+        return composer.compose({**personas_mod.VALUES, "registry": registry})
 
     _loop = AgentLoop(
         SessionLog("_boot"),
@@ -398,14 +400,40 @@ def _build_engine(cfg: dict | None = None) -> None:
         system_prompt=sys_by_source,
         max_steps=8,
         fold_tool_traces=False,
-        # 自走轮自语进上下文的前缀(内容层文案;空 = 不加,见 personas.py)
-        self_talk_prefix=SELF_TALK_PREFIX,
+        # 自走轮自语进上下文的前缀(内容层文案;见 personas.SELF_TALK_PREFIX)
+        self_talk_prefix=personas_mod.SELF_TALK_PREFIX,
     )
 
 
 def _session_log(session_id: str) -> SessionLog:
     """按会话 id 取日志(不存在会由 store 建空)。"""
     return _store.load_log(session_id)
+
+
+# (调试/实验台)引擎真实装配的 composer,供只读组件查询(_build_engine 里填)
+_composers: dict[str, object] = {}
+
+
+def system_component_sections(
+    source: str, log=None,
+) -> list[tuple[str, str]]:
+    """SYSTEM 组件拆分(只读,debug/实验台用):与 sys_by_source 同一 composer。
+
+    与喂模型的 compose 是**同一批段**(真实装配的段,不是实验台另拼),
+    只是按段标名渲染出来 —— 看 persona/situation/world/state/tool_usages
+    各是谁、边界在哪。渲染仍是段自身的 render(values),不写日志。
+    """
+    mode = "backfill" if (log is not None and log.time_cursor is not None) \
+        else ("self" if source == "self" else "chat")
+    composer = _composers.get(mode)
+    if composer is None:
+        return []
+    values = {**personas_mod.VALUES, "registry": _tools}
+    return [
+        (s.name, s.render(values))
+        for s in composer.sections()
+        if s.render(values) and s.render(values).strip()
+    ]
 
 
 def _start_heartbeat() -> None:
