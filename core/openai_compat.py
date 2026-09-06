@@ -149,12 +149,16 @@ class OpenAICompatibleLLM:
             )
             resp.raise_for_status()
         except requests.RequestException as exc:
-            detail = ""
+            # exc.response 有 = HTTP 错误(状态码+body 可见);
+            # 没有 = 传输层失败(连不上/超时/DNS/被拒)—— 必须带上 str(exc),
+            # 否则只剩空壳"LLM API error:"无从诊断(2026-09 修复)。
             if exc.response is not None:
-                detail = exc.response.text
-            raise RuntimeError(
-                f"LLM API {exc.response.status_code if exc.response else 'error'}: {detail}"
-            ) from exc
+                status = exc.response.status_code
+                detail = f"HTTP {status}: {exc.response.text}"
+            else:
+                status = "transport"
+                detail = str(exc) or type(exc).__name__
+            raise RuntimeError(f"LLM API {status}: {detail}") from exc
 
         data = resp.json()
         message = data["choices"][0]["message"]
@@ -227,12 +231,13 @@ class OpenAICompatibleLLM:
             )
             resp.raise_for_status()
         except requests.RequestException as exc:
-            detail = ""
             if exc.response is not None:
-                detail = exc.response.text
-            raise RuntimeError(
-                f"LLM API {exc.response.status_code if exc.response else 'error'}: {detail}"
-            ) from exc
+                status = exc.response.status_code
+                detail = f"HTTP {status}: {exc.response.text}"
+            else:
+                status = "transport"
+                detail = str(exc) or type(exc).__name__
+            raise RuntimeError(f"LLM API {status}: {detail}") from exc
 
         usage: dict | None = None
         try:
