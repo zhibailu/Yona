@@ -71,9 +71,11 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
 - **自语进上下文打标 ✅(2026-09-06,用户监察拍板)**:自走轮自语以 assistant
   留在卡日志,真人聊天时进模型上下文会成"孤立 [assistant]"。derive_messages
   新增 `self_talk_prefix` 投影参数:已结束自走轮的 assistant 文本前拼
-  「前缀 时间戳」一行再接正文(时间 = 那句自语发生时,支持 {time} 占位);
-  前缀文案 = `character/personas.py` 的 `SELF_TALK_PREFIX`(⏳ 空位待用户写,
-  留空 = 不加标记)。UI 聊天流仍隐藏自走轮(内心面板 + 模型上下文才见)。
+  「标记 时间戳」行再接正文(时间 = 那句自语发生时,支持 {time} 占位)。
+  标记在**投影时**做(不是写日志时),旧日志重跑自动带上。
+  前缀文案 = `character/personas.py` 的 `SELF_TALK_PREFIX`:默认 `〔{time}〕`
+  (只带时间戳先看效果,通用前缀文字 ⏳ 留用户写,改 {time} 位置即可)。
+  UI 聊天流仍隐藏自走轮(内心面板 + 模型上下文才见)。
 - **提示词实验台 ✅(2026-09-06)**:`test/prompt_lab.py` 真模型交互台 ——
   复用 character+core 装配链(不启动 server/不落盘),每次轮前自动
   `reload(character/personas)`(改文案下一轮即生效),打印 SYSTEM 组件拆分
