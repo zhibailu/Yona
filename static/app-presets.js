@@ -50,6 +50,9 @@
                 //  sources 字段不再回填;输出上限固定、摘要压缩待 compact)
                 localStorage.setItem('yona_preset', name);
                 updateMeta();
+                // 2026-09 任务6:应用预设 = 复制进当前会话快照(程序赋值不触发
+                // input 事件,这里手动触发防抖保存)
+                if (typeof _scheduleSnapshotSave === 'function') _scheduleSnapshotSave();
                 setStatus(`已加载预设: ${p.title}`);
             } catch (e) { showSystem('加载预设失败'); }
         }
