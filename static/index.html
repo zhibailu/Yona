@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小夜子</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <div class="app">
+        <!-- 左栏：会话列表 -->
+        <div class="sidebar-left">
+            <div class="sidebar-header">
+                <h2>✦ 会话</h2>
+                <button class="btn-icon" onclick="createSession()" title="新建会话">
+                    <i data-lucide="plus" style="width:16px;height:16px"></i>
+                </button>
+            </div>
+            <div id="session-list"></div>
+            <div id="portrait-panel">
+                <div class="portrait-img" onclick="this.parentElement.classList.remove('show')" title="点击关闭"></div>
+                <div class="portrait-actions">
+                    <button onclick="pickImage('avatar_ai');document.getElementById('portrait-panel').classList.remove('show')"><i data-lucide="image" style="width:13px;height:13px"></i> 更换头像</button>
+                    <button onclick="fetch(_imgUrl('avatar_ai'),{method:'DELETE'}).catch(()=>{});location.reload()"><i data-lucide="undo-2" style="width:13px;height:13px"></i> 恢复默认</button>
+                </div>
+            </div>
+            <div class="inner-life" id="inner-life">
+                <h3 onclick="this.parentElement.classList.toggle('collapsed')">内心活动 <span>▼</span></h3>
+                <div class="feed-mood" id="feed-mood"></div>
+                <div class="feed-list" id="feed-list"></div>
+            </div>
+            <div class="inner-life" id="object-drawer">
+                <h3 onclick="this.parentElement.classList.toggle('collapsed')">Yona 的工作区 <span>▼</span></h3>
+                <div class="workspace-summary" id="workspace-summary"></div>
+                <div class="workspace-actions">
+                    <button onclick="pulseAutonomy()" title="让她自己动一轮">
+                        <i data-lucide="sparkles" style="width:12px;height:12px"></i> 脉冲
+                    </button>
+                    <button onclick="_refreshWorkspace()" title="刷新工作区">
+                        <i data-lucide="refresh-cw" style="width:12px;height:12px"></i>
+                    </button>
+                </div>
+                <div class="feed-list" id="object-list"></div>
+                <div class="workspace-subtitle">动作轨迹</div>
+                <div class="feed-list" id="action-trail"></div>
+            </div>
+        </div>
+
+        <!-- 中栏：聊天区 -->
+        <div class="chat-area">
+            <div class="bg-scroll-layer" id="bg-scroll-layer" onclick="toggleBgHighlight()">
+                <img id="bg-scroll-img" src="" alt="">
+            </div>
+            <div class="chat-header">
+                <h1 id="current-title">小夜子</h1>
+                <span class="meta" id="current-meta"></span>
+            </div>
+            <div class="header-toolbar">
+                <button class="tb-btn" onclick="pickImage('bg')" oncontextmenu="showCtxMenu(event,'bg');return false" title="聊天背景 / 右键菜单">
+                    <i data-lucide="image" style="width:16px;height:16px"></i>
+                </button>
+                <span class="tb-divider"></span>
+                <button class="tb-btn" onclick="resetAllImages()" title="恢复默认图片">
+                    <i data-lucide="undo-2" style="width:16px;height:16px"></i>
+                </button>
+            </div>
+            <section class="yona-stage" id="yona-stage">
+                <div class="stage-pane">
+                    <div class="stage-label"><i data-lucide="sparkles"></i> 此刻</div>
+                    <div class="stage-status" id="stage-status">她还没有伸手做什么。</div>
+                </div>
+                <div class="stage-pane">
+                    <div class="stage-label"><i data-lucide="hand"></i> 刚放到桌面</div>
+                    <div class="stage-focus" id="stage-focus">
+                        <div class="stage-token"><i data-lucide="circle-dot" style="width:16px;height:16px"></i></div>
+                        <div style="min-width:0;flex:1">
+                            <div class="stage-title" id="stage-title">桌面是空的</div>
+                            <div class="stage-copy" id="stage-copy">等她真正留下东西，这里会直接亮出来。</div>
+                            <div class="stage-actions">
+                                <button id="stage-open-document" onclick="openStageDocument()" title="打开文档" style="display:none">
+                                    <i data-lucide="file-text" style="width:12px;height:12px"></i>
+                                </button>
+                                <button onclick="continueStageObject()">继续这个</button>
+                                <button id="stage-correct-object" onclick="openStageCorrection()">更正</button>
+                                <button onclick="showStageSource()">来源</button>
+                                <button onclick="deleteStageObject()">收走</button>
+                            </div>
+                            <div class="stage-correction" id="stage-correction">
+                                <input id="stage-correction-title" maxlength="120" aria-label="标题">
+                                <textarea id="stage-correction-content" maxlength="2400" aria-label="内容"></textarea>
+                                <div class="stage-correction-actions">
+                                    <button onclick="saveStageCorrection()">保存更正</button>
+                                    <button onclick="closeStageCorrection()">取消</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="stage-pane">
+                    <div class="stage-label"><i data-lucide="route"></i> 轨迹</div>
+                    <div class="stage-trace" id="stage-trace">下一次她产生动作时，我会在这里标出来。</div>
+                </div>
+            </section>
+            <div id="messages"></div>
+            <div class="inner-life collapsed" id="llm-log-panel" style="max-height:80px;border-top:1px solid var(--line)">
+                <h3 onclick="this.parentElement.classList.toggle('collapsed')">LLM 调试 <span>▼</span> <button class="btn-secondary" style="margin-left:8px;font-size:10px;padding:2px 8px;width:auto" onclick="event.stopPropagation();openDebugFullscreen()">全屏</button></h3>
+                <div class="feed-list" id="llm-log-list" style="font-family:monospace;font-size:10px"></div>
+            </div>
+            <!-- 全屏调试面板 -->
+            <div id="debug-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg-base);flex-direction:column">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line)">
+                    <h2 style="color:var(--accent);font-family:'Noto Serif SC',serif">LLM 完整输入输出</h2>
+                    <button class="btn-secondary" style="width:auto;padding:6px 16px" onclick="closeDebugFullscreen()">关闭</button>
+                </div>
+                <div id="debug-full-log" style="flex:1;overflow-y:auto;padding:16px;font-family:monospace;font-size:11px;line-height:1.5;white-space:pre-wrap;color:var(--text-main)"></div>
+            </div>
+            <input type="file" id="image-picker" accept="image/*" style="display:none" onchange="handleImagePick(event)">
+            <!-- 右键菜单 -->
+            <div class="ctx-menu" id="ctx-menu"></div>
+            <div class="input-area">
+                <div class="sensory-strip" id="sensory-strip">
+                    <img class="sensory-thumb" id="sensory-thumb" alt="">
+                    <div class="sensory-text" id="sensory-text"></div>
+                    <div class="sensory-actions">
+                        <button class="sensory-btn" onclick="clearVisionAttachment()" title="移除画面">
+                            <i data-lucide="x" style="width:16px;height:16px"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="input-actions">
+                    <button id="action-menu-btn" onclick="toggleActionMenu()" title="更多操作">
+                        <i data-lucide="ellipsis" style="width:18px;height:18px"></i>
+                    </button>
+                    <div id="action-menu" class="dropdown-menu" style="display:none">
+                        <!-- 2026-09:旧系统的 统计/重建向量库/导出/清理 四个按钮后端不存在,
+                            已随 app-admin.js 移入 static/_unused/(见 STRUCTURE.md §4)。
+                            未来接回能力时再放回。 -->
+                    </div>
+                </div>
+                <button class="sensory-btn" id="vision-btn" onclick="pickImage('vision')" title="给她看一张图">
+                    <i data-lucide="eye" style="width:18px;height:18px"></i>
+                </button>
+                <button class="sensory-btn" id="voice-btn" onclick="toggleVoiceInput()" title="语音输入">
+                    <i data-lucide="mic" style="width:18px;height:18px"></i>
+                </button>
+                <button class="sensory-btn" id="speak-btn" onclick="toggleVoiceOutput()" title="朗读回复">
+                    <i data-lucide="volume-2" style="width:18px;height:18px"></i>
+                </button>
+                <textarea id="input-box" rows="1" placeholder="想说点什么... (Enter 发送, Shift+Enter 换行)"></textarea>
+                <button id="send-btn" onclick="sendMessage()">发送</button>
+            </div>
+            <div class="status-bar">
+                <span><span class="status-dot"></span><span id="status-text">就绪</span></span>
+                <span id="api-status">localhost:8000</span>
+            </div>
+        </div>
+
+        <!-- 右栏：设置面板 -->
+        <div class="sidebar-right">
+            <div class="setting-group">
+                <label> 模型 <span class="range-value" id="model-display"></span></label>
+                <!-- 2026-09 任务③ 连接管理:.env 不是产品配置,连接唯一入口 = UI。
+                     下拉列出当前连接端点真正可用的模型(引擎快照),切换即生效。 -->
+                <select id="model-select"></select>
+                <button class="btn-secondary" style="width:100%;margin-top:6px" onclick="openConnect()">连接 / 更换模型</button>
+                <span id="conn-note" style="display:block;font-size:11px;color:var(--text-muted);margin-top:6px"></span>
+            </div>
+            <div class="setting-group">
+                <label> 温度 <span class="range-value" id="temp-display">1.2</span></label>
+                <input type="range" id="temperature" min="0" max="2" step="0.1" value="1.2">
+            </div>
+            <div class="setting-group">
+                <label> 角色设定</label>
+                <textarea id="system-prompt" placeholder="自定义小夜子的性格...&#10;留空 = 旗舰「小夜子」人格；填写则从本轮起覆盖人格段（状态/世界照常注入）"></textarea>
+            </div>
+            <div class="setting-group">
+                <label> 上下文窗口轮数</label>
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+                    <input type="range" id="max-rounds" min="0" max="40" step="2" value="20" style="flex:1;margin:0">
+                    <input type="number" id="rounds-num" min="0" max="40" step="2" value="20" class="num-input" onfocus="this.select()">
+                </div>
+                <span style="font-size:11px;color:var(--text-muted)">0 = 不限制，保留全部历史。按「已结束轮」整轮裁剪，不会切散她调工具的痕迹</span>
+            </div>
+            <div class="setting-group">
+                <label> 上下文预算 <span style="font-weight:normal;color:var(--text-muted)">（信息）</span></label>
+                <p style="font-size:11px;color:var(--text-muted);margin:0 0 6px">
+                    模型窗口约 1M tokens。历史由上面「轮数」整轮裁剪；精确的
+                    token 计量与摘要压缩（compact）接入后开放 —— 在此之前
+                    不给无效的数值滑块。
+                </p>
+                <label style="display:flex;align-items:center;gap:8px;cursor:not-allowed;margin-bottom:4px;opacity:.55" title="摘要压缩（compact）接入后开放">
+                    <input type="checkbox" id="enable-summarize" disabled style="width:auto;accent-color:var(--accent)">
+                    启用摘要压缩（超 Token 预算时）
+                </label>
+                <span style="font-size:11px;color:var(--text-muted)">置灰占位：逻辑随 compact 落地后解锁（DESIGN §9）</span>
+            </div>
+            <div class="setting-group">
+                <label> 上下文预设</label>
+                <div style="display:flex;gap:6px;margin-bottom:8px">
+                    <select id="preset-select" style="flex:1">
+                        <option value="">-- 选择预设 --</option>
+                    </select>
+                    <button class="btn-icon" style="width:28px;height:28px;flex-shrink:0" onclick="loadPreset()" title="应用预设">
+                        <i data-lucide="play" style="width:14px;height:14px"></i>
+                    </button>
+                </div>
+                <div style="display:flex;gap:6px">
+                    <button class="btn-secondary" style="flex:1" onclick="savePreset()">💾 保存当前</button>
+                    <button class="btn-secondary" style="flex:1" onclick="deletePreset()">🗑️ 删除选中</button>
+                </div>
+            </div>
+            <div class="setting-group">
+                <button class="btn-secondary" onclick="resetSettings()">↩ 恢复默认设置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 连接你的模型(2026-09 首启向导;key 只发到本机服务端,不回显) -->
+    <div id="connect-overlay" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);align-items:center;justify-content:center">
+        <div style="background:var(--bg-base);border:1px solid var(--line);border-radius:12px;padding:20px;width:min(430px,92vw)">
+            <h3 style="color:var(--accent);font-family:'Noto Serif SC',serif;margin-top:0">连接你的模型</h3>
+            <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">填一次存到本机，之后自动连接；密钥不离开你的电脑、不会回显。支持任意 OpenAI 兼容端点（DeepSeek / 本地 vLLM / 代理…）。</p>
+            <label style="font-size:12px;display:block;margin-bottom:4px">API 地址</label>
+            <input id="conn-url" placeholder="https://api.deepseek.com" style="width:100%;box-sizing:border-box;margin-bottom:10px;font-size:12px;padding:6px 8px">
+            <label style="font-size:12px;display:block;margin-bottom:4px">API Key</label>
+            <input id="conn-key" type="password" placeholder="sk-..." style="width:100%;box-sizing:border-box;margin-bottom:10px;font-size:12px;padding:6px 8px">
+            <label style="font-size:12px;display:block;margin-bottom:4px">默认模型（留空 = 端点列表第一个）</label>
+            <input id="conn-model" placeholder="如 deepseek-v4-flash" style="width:100%;box-sizing:border-box;margin-bottom:12px;font-size:12px;padding:6px 8px">
+            <div id="conn-status" style="font-size:12px;color:#c0392b;margin-bottom:10px;min-height:16px"></div>
+            <div style="display:flex;gap:8px;justify-content:flex-end">
+                <button class="btn-secondary" onclick="closeConnect()">取消</button>
+                <button id="conn-save-btn" onclick="connectSave()">测通并连接</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app-core.js"></script>
+    <script src="app-sessions.js"></script>
+    <script src="app-messages.js"></script>
+    <script src="app-presets.js"></script>
+    <script src="app-objects-sensory.js"></script>
+    <!-- ?v=2:2026-09 llm-log 改推送式(旧版 2s 盲轮询已删);版本号防浏览器缓存旧 JS -->
+    <script src="app-media-debug.js?v=2"></script>
+</body>
+</html>
