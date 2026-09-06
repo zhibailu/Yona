@@ -118,6 +118,14 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   与 SELF_TALK_PREFIX 同区;措辞沿用 LIFE_BACKFILL §1.3 原文,`{gap}` = 引擎
   算好的时长)。引擎 producer 每次 compose 现取 personas_mod 属性、只填时长;
   想改"怎么说"只改 personas 一处,引擎不写文案。
+- **自走/补写情境合一(删 BACKFILL_SITUATION)✅(2026-09 用户拍板)**:用户
+  改写 SELF_SITUATION = "现在是你自己的生活时间,参考时间线,生成符合生活现象
+  的事件"—— 自走轮与补写轮在他语义里就是同一件事(同一 loop/同一 LifeSampler,
+  只差触发点:实时醒来 vs 离线回放),两份独处轮文案是旧"实时自语 vs 离线记一笔"
+  语义的遗留,必漂移。拍板:删 `BACKFILL_SITUATION`,补写 composer 复用
+  SELF_SITUATION + self 同一组段(timeline/wake_budget);差异只剩引擎机制
+  (世界钟 = 回放游标、空工具、每件动态 note 带间隔/预算)。要改独处轮怎么说,
+  只改 SELF_SITUATION 一处。
 - **工具调用渲染去重 ✅(2026-09-07)**:流式里一次工具调用 = 首段(id/name)
   + N 段参数增量(arguments_delta,无 id/name)—— 逐段打印/记日志会把一次
   change_outfit 刷成二十行空 ⚙。修两处消费端:prompt_lab 控制台按调用去重

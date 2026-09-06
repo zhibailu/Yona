@@ -93,7 +93,11 @@ def test_cursor_without_backfill_clock_is_normal_self_view():
 
 
 def test_cursor_with_backfill_clock_is_backfill_view():
-    """游标 **且** 补写钟在转 → 补写视图(situation=BACKFILL)。"""
+    """游标 **且** 补写钟在转 → 补写视图(世界时间 = 历史游标)。
+
+    情境文案 = SELF_SITUATION(2026-09 用户拍板合一:补写轮没有自己的情境,
+    它是自走轮的离线回放,复用同一份 —— 曾另写 BACKFILL_SITUATION,已删)。
+    """
     eng._build_engine(dict(_FAKE_CFG))
     ts = _epoch(2026, 9, 5, 14, 0)
     eng._backfill_clock["ts"] = ts
@@ -102,7 +106,7 @@ def test_cursor_with_backfill_clock_is_backfill_view():
     try:
         sections = eng.system_component_sections("self", log)
         sit = _situation_text(sections)
-        assert sit == personas.BACKFILL_SITUATION, sit
+        assert sit == personas.SELF_SITUATION, sit
         world = _world_text(sections)
         assert "[当前时间] 2026-09-05 14:00" in world, world
     finally:

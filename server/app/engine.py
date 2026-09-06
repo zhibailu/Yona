@@ -514,11 +514,15 @@ def _build_engine(cfg: dict | None = None) -> None:
         situation=personas_mod.SELF_SITUATION,
         world_now=_live_clock,
         extra_sections=[timeline_section, wake_budget_section])
-    # 补写回放轮:世界时间 = 回放游标(历史时刻),不是墙钟/当前覆盖
+    # 补写回放轮 = 自走轮的离线回放(2026-09 用户拍板合一):与 self_composer
+    # **同一份情境文案(SELF_SITUATION)+ 同一组段**(timeline / wake_budget),
+    # 差异只剩机制:世界时间 = 回放游标(历史时刻),不是墙钟/当前覆盖。
+    # 不再有独立的 BACKFILL_SITUATION 文案(曾写两份独处轮措辞,必漂移)。
     backfill_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,
-        situation=personas_mod.BACKFILL_SITUATION,
+        situation=personas_mod.SELF_SITUATION,
         world_now=lambda: time.localtime(_backfill_clock["ts"]),
+        extra_sections=[timeline_section, wake_budget_section],
     )
     # 暴露给调试/实验台只读查询(不改产品路径:compose 仍在 sys_by_source 里做)
     _composers["chat"] = chat_composer
@@ -722,9 +726,9 @@ def _maybe_backfill_life() -> None:
                             )
                         else:
                             gap_note = "\n你上一件事刚做完不久。"
-                    # note 只留"动态"部分(本段多长/隔了多久)——
-                    # 静态部分(你一个人、别报时间、别写别的时段)已在
-                    # BACKFILL_SITUATION(情境段)里,不在这里重复(2026-09 归位)。
+                    # note 只留"动态"部分(本段多长/隔了多久)——静态部分
+                    # (独处轮怎么说)在 personas.SELF_SITUATION(补写复用同一份,
+                    # 2026-09 用户拍板合一,曾另写 BACKFILL_SITUATION,已删)。
                     note = (
                         f"这段时间(约 {_human_gap(e.budget_min * 60)})里你只做了"
                         "**一件事**——就是现在刚做完/正在做的这一件。"
