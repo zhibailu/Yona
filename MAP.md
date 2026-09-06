@@ -68,6 +68,12 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   (CHAT/SELF/BACKFILL_PERSONA,身份各写一遍、互相侵吞)→ 唯一 `PERSONA`
   常驻一个组件 + 情境段(CHAT/SELF/BACKFILL_SITUATION,轮的属性,不重述身份);
   engine 三 composer 共享 PERSONA;补写 note 里与情境段重复的句子已清。
+- **自语进上下文打标 ✅(2026-09-06,用户监察拍板)**:自走轮自语以 assistant
+  留在卡日志,真人聊天时进模型上下文会成"孤立 [assistant]"。derive_messages
+  新增 `self_talk_prefix` 投影参数:已结束自走轮的 assistant 文本前拼
+  「前缀 时间戳」一行再接正文(时间 = 那句自语发生时,支持 {time} 占位);
+  前缀文案 = `character/personas.py` 的 `SELF_TALK_PREFIX`(⏳ 空位待用户写,
+  留空 = 不加标记)。UI 聊天流仍隐藏自走轮(内心面板 + 模型上下文才见)。
 - **gate 方案② ✅(2026-09 方向拍板)**:与补写同一原语(概率 = 每天期望 ×
   shape × Δt);**三个数值 ⏳ 待拍(cooldown / interval / wakes_per_day)**
 - 人设笔误史:曾把 BACKFILL 写成"16 岁女孩"(与 21 岁冲突),已修回 ——

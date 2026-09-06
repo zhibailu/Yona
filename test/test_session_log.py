@@ -309,6 +309,57 @@ def _append_completed_turn(log, n: int) -> None:
     log.append("turn/end", turn=n, reason={"kind": "completed"})
 
 
+def _append_completed_self_turn(log, n: int, text: str, at: float) -> None:
+    """手造一轮完整已结束自走轮(source=self):占位 user + 自语 assistant。"""
+    log.append("turn/start", turn=n, source="self", at=at)
+    log.append("user/message",
+               content=[{"type": "text", "text": "【自动轮】占位"}],
+               source="self", turn=n, at=at)
+    log.append("step/start", turn=n, step=1, at=at)
+    log.append("assistant/message",
+               content=[{"type": "text", "text": text}], turn=n, step=1, at=at)
+    log.append("step/end", turn=n, step=1, at=at)
+    log.append("turn/end", turn=n, reason={"kind": "completed"}, at=at)
+
+
+def test_self_talk_prefix_marks_ended_self_turns_only():
+    """自走轮自语进上下文:已结束自走轮的 assistant 前拼「前缀 时间戳」行,
+    真人轮的消息不加(2026-09:避免孤立 assistant 冒充对用户说的话)。"""
+    log = SessionLog("t")
+    _append_completed_self_turn(
+        log, 1, "星期天晚上,不想动。", at=1_700_000_000.0)
+    _append_completed_turn(log, 2)  # 真人轮:问2/答2
+
+    # 不带前缀 = 原行为(自语裸文本保留)
+    bare = [m for m in log.derive_messages() if m["role"] == "assistant"]
+    assert bare[0]["content"][0]["text"] == "星期天晚上,不想动。"
+
+    msgs = log.derive_messages(self_talk_prefix="〔自语〕")
+    self_txt = msgs[0]["content"][0]["text"]
+    # 前缀 + 空格 + 时间戳(%m-%d %H:%M)+ 换行 + 正文
+    import re
+    assert re.match(r"^〔自语〕 \d{2}-\d{2} \d{2}:\d{2}\n", self_txt), self_txt
+    assert self_txt.endswith("星期天晚上,不想动。"), self_txt
+    # 真人轮 assistant 不被加前缀
+    user_turn_txt = msgs[2]["content"][0]["text"]
+    assert user_turn_txt == "答2", user_turn_txt
+
+
+def test_self_talk_prefix_time_placeholder_and_zero_semantics():
+    """{time} 占位换成时间;空前缀(默认)= 完全不改。"""
+    log = SessionLog("t")
+    _append_completed_self_turn(log, 1, "晚风凉凉的。", at=1_700_000_000.0)
+    _append_completed_self_turn(log, 2, "想睡了。", at=1_700_010_000.0)
+
+    # {time} 占位:直接替换,不带多余空格
+    msgs = log.derive_messages(self_talk_prefix="〔自语·{time}〕")
+    first = msgs[0]["content"][0]["text"].split("\n")[0]
+    assert first.startswith("〔自语·"), first
+    assert first.endswith("〕"), first
+    # 空前缀 = 不改(回归保护)
+    assert log.derive_messages() == log.derive_messages(self_talk_prefix="")
+
+
 def test_last_turns_window_keeps_recent_ended_plus_open_turn():
     """轮窗口:保留最近 N 个已结束轮 + 当前未结束轮;0/None = 全量。"""
     log = SessionLog("t")
@@ -385,4 +436,6 @@ if __name__ == "__main__":
     test_replace_persists_roundtrip()
     test_last_turns_window_keeps_recent_ended_plus_open_turn()
     test_last_turns_drops_whole_turns_never_splits_tool_pairs()
+    test_self_talk_prefix_marks_ended_self_turns_only()
+    test_self_talk_prefix_time_placeholder_and_zero_semantics()
     print("SessionLog all tests passed")

@@ -48,10 +48,15 @@ class AgentLoop:
         max_steps: int = 20,
         on_chunk: Callable[[dict[str, Any]], None] | None = None,
         fold_tool_traces: bool = False,
+        self_talk_prefix: str = "",
     ) -> None:
         self.log = log
         self.llm = llm
         self.tools = tools
+        # self_talk_prefix(2026-09 加):自走轮自语进模型上下文时的前缀文案
+        # (透传给 derive_messages;内容层提供,如 personas.SELF_TALK_PREFIX)。
+        # 空串 = 不加标记。任何轮(含 user 聊天轮)看到历史里的自语都带标记。
+        self.self_talk_prefix = self_talk_prefix
         # system_prompt:静态字符串,或 builder callable。
         # builder 每 step 现取,拿到本轮 registry(与 schema 同批工具);
         # builder 可按接受参数数拿到更多上下文:
@@ -254,6 +259,7 @@ class AgentLoop:
                 fold_tool_traces=self.fold_tool_traces,
                 retained_tools=self._retained,
                 last_turns=max_rounds if max_rounds else None,
+                self_talk_prefix=self.self_talk_prefix,
             )
         )
         return messages

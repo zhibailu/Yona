@@ -25,6 +25,7 @@ from character.personas import (  # noqa: E402  人格文案(内容层),见文�
     CHAT_SITUATION,
     PERSONA,
     SELF_SITUATION,
+    SELF_TALK_PREFIX,
     VALUES,
 )
 from character.state import CharacterState
@@ -397,6 +398,8 @@ def _build_engine(cfg: dict | None = None) -> None:
         system_prompt=sys_by_source,
         max_steps=8,
         fold_tool_traces=False,
+        # 自走轮自语进上下文的前缀(内容层文案;空 = 不加,见 personas.py)
+        self_talk_prefix=SELF_TALK_PREFIX,
     )
 
 

@@ -230,6 +230,7 @@ class SessionLog:
         fold_tool_traces: bool = False,
         retained_tools: set[str] | None = None,
         last_turns: int | None = None,
+        self_talk_prefix: str = "",
     ) -> list[Message]:
         """
         把日志投影成喂给模型的 messages（按事件顺序）。
@@ -253,6 +254,15 @@ class SessionLog:
         user 说过"没有用户消息"这种怪话);**当前轮**的占位保留(它是本次
         调用的触发点,让模型知道要开新一段,而不是续写上一条 assistant)。
 
+        self_talk_prefix(2026-09 加):自走轮的自语以 assistant 角色留在日志,
+        真人聊天时进上下文会变成"没有 user 打头的孤立 assistant"。投影时给
+        **已结束**自走轮的 assistant 文本前拼一行「前缀 时间戳」再接正文,
+        让模型分清这是她过去的自语(UI 聊天流仍隐藏自走轮,只有内心面板和
+        模型上下文看得到)。前缀是内容层文案(由调用方传,如 personas 的
+        SELF_TALK_PREFIX);支持 {time} 占位 = 换成那句自语发生时的时间
+        (%m-%d %H:%M,补写轮=离线时刻);不含 {time} 则自动追加时间戳。
+        空串 = 不加标记(默认,行为不变)。当前轮(进行中,无 turn/end)不加。
+
         last_turns(2026-09 加,与 last_n 不同):按**已结束轮边界**保留最近
         N 轮 + 当前未结束轮,整体裁掉更旧的已结束轮 —— 绝不切散轮内的
         assistant tool-call/tool/result 配对(消息粒度裁剪会切出孤儿工具段)。
@@ -274,6 +284,13 @@ class SessionLog:
         # - fold_turns:仅折叠视图生效时的已结束轮 —— 用于工具痕迹折叠
         ended_turns = {e.data["turn"] for e in self._events if e.type == "turn/end"}
         fold_turns = ended_turns if fold_tool_traces else set()
+        # 自走轮集合(turn/start 带 source):assistant 消息本身不带 source,
+        # 靠轮号归属 —— 判断"这条自语是谁的"用轮号查 self 轮。
+        self_turns = {
+            e.data["turn"]
+            for e in self._events
+            if e.type == "turn/start" and e.data.get("source") == "self"
+        }
         # last_turns 轮窗口:允许的轮 = 最近 N 个已结束轮 + 所有未结束轮
         # (当前在跑/被打断没 turn/end 的轮永不裁)。None/0 = 全量。
         allowed_turns: set[int] | None = None
@@ -335,6 +352,28 @@ class SessionLog:
                 # 源头已在循环侧堵住,这里兜底防历史/外部日志。
                 if not content:
                     continue
+                # 自走轮自语标注(2026-09):已结束自走轮的 assistant 文本前拼
+                # 「前缀 时间戳」一行再接正文 —— 她独处时说的话进真人聊天上下文
+                # 时带上自己的时间戳,不冒充"对用户说的";前缀文案由调用方给
+                # (personas.SELF_TALK_PREFIX),留空 = 不加标记。
+                if self_talk_prefix and data.get("turn") in self_turns \
+                        and data.get("turn") in ended_turns:
+                    ts = time.strftime(
+                        "%m-%d %H:%M", time.localtime(event.time)
+                    )
+                    if "{time}" in self_talk_prefix:
+                        label = self_talk_prefix.replace("{time}", ts)
+                    else:
+                        label = f"{self_talk_prefix} {ts}"
+                    # 只给第一条文本块打标;纯 tool-call 消息(无自语文本)跳过
+                    for i, b in enumerate(content):
+                        if b.get("type") == "text":
+                            content = list(content)
+                            content[i] = {
+                                **b,
+                                "text": f"{label}\n{b.get('text', '')}",
+                            }
+                            break
                 order += 1
                 anchored.append(
                     (anchor, order, {"role": "assistant", "content": content})
