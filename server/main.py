@@ -259,6 +259,7 @@ async def pulse_autonomy():
     sid = engine.life_session_id()
     log = engine._store.load_log(sid)
     t0 = time.time()
+    engine.begin_self_wake()  # 普通自走轮(脉冲)也产时间预算(2026-09 拍板)
     try:
         with engine._lock:
             # 目标卡快照的人格覆盖(若有)在自走轮同样生效
@@ -273,6 +274,8 @@ async def pulse_autonomy():
         raise HTTPException(
             status_code=500, detail=f"Autonomy pulse failed: {exc}"
         )
+    finally:
+        engine.end_self_wake()
     return {"elapsed_ms": int((time.time() - t0) * 1000), "session_id": sid}
 
 

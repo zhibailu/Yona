@@ -306,12 +306,16 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
 
     虚拟时钟(2026-09):非补写回放时,先把引擎世界钟拨到 _vnow()、给 log 盖
     虚拟时间游标 —— 这轮的事件/自语时间戳都落在虚拟时刻,跑完撤掉(引擎回墙钟)。
-    补写回放轮例外:游标与 _backfill_clock 已由调用方(_run_backfill)设好,不碰。
+    普通自走轮(2 自走 / 情境)也走引擎同款 **时间预算**(begin_self_wake,与
+    心跳/脉冲一致 —— 用户拍板:普通轮与补写同一事件算法);补写回放例外。
     """
     log = log if log is not None else _log
     replaying = bool(eng._backfill_clock["ts"])  # 补写回放:游标归调用方管
+    ordinary_self = source == "self" and not replaying
     if not replaying:
         _apply_clock(log)
+    if ordinary_self:
+        eng.begin_self_wake()
     try:
         tag = {"self": "自走轮", "user": "陪聊轮"}.get(source, source)
         if replaying:
@@ -348,6 +352,8 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
         except Exception as exc:  # noqa: BLE001
             print(f"\n⚠ LLM 调用失败(回菜单可继续): {exc}")
     finally:
+        if ordinary_self:
+            eng.end_self_wake()
         if not replaying:
             _clear_clock(log)
 

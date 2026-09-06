@@ -24,13 +24,14 @@ from character import personas as personas_mod  # noqa: E402 文案(内容层);�
 # 不用 from-import 绑死 —— 改文案后 reload 模块 + 重建引擎即生效(2026-09)
 from character.state import CharacterState
 from character.tools import make_change_outfit_tool
+from core.composer import SystemSection, make_timeline_section  # noqa: E402
 from core.heartbeat import Heartbeat
 from core.loop import AgentLoop
 from core.openai_compat import OpenAICompatibleLLM
 from core.session_log import SessionLog
 from core.tools import ToolRegistry
 
-from ..rhythm import LifeSampler
+from ..rhythm import LifeSampler, draw_budget_min
 from ..store import SessionStore
 from .gate import ServerGate
 
@@ -82,6 +83,14 @@ _backfill_clock: dict[str, float] = {"ts": 0.0}
 # 产品路径从不设它(恒 0 = 真实墙钟);与 _backfill_clock 分开:回放轮的世界钟
 # 跟历史游标走(补写),普通轮的"现在"才读这里。
 _clock_override: dict[str, float] = {"ts": 0.0}
+# 普通轮时间预算(2026-09 用户拍板:自走/心跳/脉冲与补写是同一事件算法、同一
+# loop,只是触发点不同 —— 普通轮也应产"这段时间约 X 分钟"的预算)。min>0 时
+# self composer 的 [时间预算] 段报它;触发方跑完要清回 0(end_self_wake)。
+_wake_budget: dict[str, float] = {"min": 0.0}
+# 普通轮时间预算(2026-09 用户拍板:自走/心跳/脉冲与补写同一事件算法,触发点
+# 不同而已 —— 普通轮也产一个"这段时间约 X 分钟"的预算)。min>0 时,self
+# composer 的 [时间预算] 段报它(该轮"只做一件事、别做做不完的事");跑完清零。
+_wake_budget: dict[str, float] = {"min": 0.0}
 _lock = threading.Lock()  # 全局引擎锁(loop 内部已有 turn 锁,这里护 store 落盘)
 # LLM 连接状态(2026-09 任务③ 连接管理):运行时配置的进程内影子 ——
 # 谁连的(base_url)/默认模型/该端点可用模型列表。key 只进 _build_engine,不出 HTTP。
@@ -294,6 +303,12 @@ class LifeLoop:
         tag = "情境自走" if self_note else "自走"
         sid = life_session_id()
         _live(f"她开始{tag}(卡片 {sid})(source={source})…")
+        # 普通自走轮(心跳/脉冲)= 与补写同一个事件算法,只是触发点不同 →
+        # 也产一个"这段时间约 X 分钟"的预算(2026-09 用户拍板)。回放轮另有自己的
+        # 预算 note 且走 cursor,不在这里重复抽。
+        is_self = source == "self"
+        if is_self:
+            begin_self_wake()
         try:
             log = _store.load_log(sid)
             with _lock:
@@ -311,6 +326,9 @@ class LifeLoop:
         except Exception as exc:  # noqa: BLE001
             _live(f"{tag}失败: {exc}")
             raise
+        finally:
+            if is_self:
+                end_self_wake()
 
 
 # ---------- 打印台 / 小工具 ----------
@@ -318,6 +336,21 @@ class LifeLoop:
 def _live(msg: str) -> None:
     """打印台实时现场:带时间戳的一行(她自走/忙/排队,肉眼可跟)。"""
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def begin_self_wake() -> None:
+    """普通自走轮(心跳/脉冲/自走,非回放)开跑前:抽一次时间预算。
+
+    2026-09 用户拍板:普通轮与补写轮是**同一个事件算法**,只是触发点不同
+    (此刻醒来 vs 离线回放)—— 普通轮也要产一个"这段时间约 X 分钟"的预算,
+    当轮输入里带"只做一件事、别做做不完的事"。抽完由 end_self_wake 清。
+    """
+    _wake_budget["min"] = draw_budget_min()
+
+
+def end_self_wake() -> None:
+    """跑完清掉预算(0 = 未激活,self composer 的 [时间预算] 段不出现)。"""
+    _wake_budget["min"] = 0.0
 
 
 def _human_gap(seconds: float) -> str:
@@ -378,14 +411,41 @@ def _build_engine(cfg: dict | None = None) -> None:
         ts = _clock_override["ts"]
         return time.localtime(ts) if ts else time.localtime()
 
+    def _live_epoch(log=None):
+        # 时间线的"现在":与 _live_clock 同一只钟(秒级)。回放轮 = 历史游标;
+        # 普通轮 = 实验台拨过的当前时刻,否则真实墙钟。
+        if log is not None and log.time_cursor is not None and _backfill_clock["ts"]:
+            return _backfill_clock["ts"]
+        return _clock_override["ts"] or time.time()
+
+    # VISION 决策 8:世界=绝对时间,时间线=相对时间(距上次真人互动多久)。
+    # 段在构造时不闭包 log —— compose 时经 values["log"]/["now_epoch"] 现给
+    # (同一只钟,与 world 不打架);没跟真人说过话时该段自然不出现。
+    timeline_section = make_timeline_section()
+
+    def _wake_budget_text(values) -> str | None:
+        """普通轮时间预算(2026-09 用户拍板:自走/心跳/脉冲与补写同一事件算法,
+        只是触发点不同 —— 普通轮也产"这段时间约 X 分钟"的预算,只做一件事、
+        别做做不完的事)。min=0 = 未激活,本段不出现(产品不设 = 没这回事)。"""
+        m = _wake_budget["min"]
+        if m <= 0:
+            return None
+        return (f"[时间预算] 这段时间约 {_human_gap(m * 60)},"
+                "只做一件事、别做做不完的事。")
+
+    wake_budget_section = SystemSection(
+        name="wake_budget", priority=17, producer=_wake_budget_text)
+
     chat_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,
         situation=personas_mod.CHAT_SITUATION,
-        world_now=_live_clock)
+        world_now=_live_clock,
+        extra_sections=[timeline_section])
     self_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,
         situation=personas_mod.SELF_SITUATION,
-        world_now=_live_clock)
+        world_now=_live_clock,
+        extra_sections=[timeline_section, wake_budget_section])
     # 补写回放轮:世界时间 = 回放游标(历史时刻),不是墙钟/当前覆盖
     backfill_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,
@@ -397,16 +457,20 @@ def _build_engine(cfg: dict | None = None) -> None:
     _composers["self"] = self_composer
     _composers["backfill"] = backfill_composer
 
+    def _values(registry, log=None) -> dict:
+        """compose 值:人设插值 + 本轮工具 + (时间线用)日志与同一只钟。"""
+        return {**personas_mod.VALUES, "registry": registry,
+                "log": log, "now_epoch": _live_epoch(log)}
+
     def sys_by_source(registry, source, log=None):
         # 三参 builder:回放轮 = 时间游标 **且** 补写钟在转(engine 产品补写/lab 补写
         # 模拟都同时设两者)—— 用补写视图(世界时间=历史游标)。实验台"拨当前时间"
         # 的普通轮只设 log 游标(给事件盖时间戳),_backfill_clock 恒 0 → 不算回放,
         # 走陪聊/自走实时视图(世界时间=_clock_override)。(2026-09 判定收窄)
         if log is not None and log.time_cursor is not None and _backfill_clock["ts"]:
-            return backfill_composer.compose(
-                {**personas_mod.VALUES, "registry": registry})
+            return backfill_composer.compose(_values(registry, log))
         composer = self_composer if source == "self" else chat_composer
-        return composer.compose({**personas_mod.VALUES, "registry": registry})
+        return composer.compose(_values(registry, log))
 
     _loop = AgentLoop(
         SessionLog("_boot"),
@@ -446,7 +510,14 @@ def system_component_sections(
     composer = _composers.get(mode)
     if composer is None:
         return []
-    values = {**personas_mod.VALUES, "registry": _tools}
+    # 时间线段的 log/now 用同一只钟(与 world 不打架):普通轮 = 当前覆盖/墙钟,
+    # 回放轮 = 补写游标 —— 和 sys_by_source 的 _values 一致。
+    log_now = _backfill_clock["ts"] if (log is not None
+                                         and log.time_cursor is not None
+                                         and _backfill_clock["ts"]) \
+        else (_clock_override["ts"] or time.time())
+    values = {**personas_mod.VALUES, "registry": _tools,
+              "log": log, "now_epoch": log_now}
     return [
         (s.name, s.render(values))
         for s in composer.sections()

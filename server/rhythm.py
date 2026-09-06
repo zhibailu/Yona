@@ -129,6 +129,28 @@ def integral_shape(h0: float, h1: float, shape: ShapeCurve | None = None,
     return total
 
 
+def draw_budget_min(
+    rng: random.Random | None = None,
+    duration_mix: list[tuple[float, tuple[int, int]]] | None = None,
+) -> float:
+    """抽一次事件预算(分钟)—— 命中后/醒来那轮的"这段时间约 X 分钟"。
+
+    普通轮(心跳/自走)与补写轮共用同一个时长分布(2026-09 用户拍板:
+    普通轮也用 LifeSampler 同款预算),数值来源唯一 = params.DEFAULT_DURATION_MIX。
+    rng 注入(可测/可固定复现)。
+    """
+    mix = duration_mix or DEFAULT_DURATION_MIX
+    rng = rng if rng is not None else random.Random()
+    r = rng.random()
+    acc = 0.0
+    for prob, (lo, hi) in mix:
+        acc += prob
+        if r <= acc:
+            return rng.uniform(lo, hi)
+    lo, hi = mix[-1][1]
+    return rng.uniform(lo, hi)
+
+
 @dataclass
 class Event:
     """一次补写事件:起始时刻 + budget(分钟)。
@@ -198,11 +220,5 @@ class LifeSampler:
         return events
 
     def _duration_min(self) -> float:
-        r = self.rng.random()
-        acc = 0.0
-        for prob, (lo, hi) in self.mix:
-            acc += prob
-            if r <= acc:
-                return self.rng.uniform(lo, hi)
-        lo, hi = self.mix[-1][1]
-        return self.rng.uniform(lo, hi)
+        """抽时长(与模块级 draw_budget_min 同一实现,复用单点)。"""
+        return draw_budget_min(rng=self.rng, duration_mix=self.mix)

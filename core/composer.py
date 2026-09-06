@@ -126,9 +126,9 @@ def make_usage_section(
 
 
 def make_timeline_section(
-    log,
+    log=None,
     now_epoch=None,
-    priority: int = 40,
+    priority: int = 16,
     name: str = "timeline",
 ) -> SystemSection:
     """会话时间线段:距上次真人互动多久(派生自日志,不是额外状态)。
@@ -138,13 +138,17 @@ def make_timeline_section(
     数据从日志投影:最后一条 source=user 的 user/message 事件自带 time。
     没跟真人说过话(全新会话)则不出现本段。
 
-    now_epoch: 秒级时间源,默认系统时钟;与 make_world_section 的 now
-    应共用同一只钟(测试注入时两段要一致,否则时间打架)。
+    log / now_epoch 两个来源都可以**运行时现给**(引擎每轮日志不同):
+      - 构造时可给 log / now_epoch(探针/单测,闭包);
+      - 也可以构造时不给,compose 时经 values 传 "log"(SessionLog)
+        与 "now_epoch"(秒级 float 或 callable)—— 引擎装配即此路径,
+        同一只钟与世界 section 一致(注入"当前时间"时两段不打架)。
+    now_epoch 缺省 = 系统时钟。
     """
 
-    def _last_user_epoch() -> float | None:
+    def _last_user_epoch(lg) -> float | None:
         t = None
-        for e in log.events:
+        for e in lg.events:
             if e.type == "user/message" and e.data.get("source", "user") == "user":
                 t = e.time
         return t
@@ -159,11 +163,20 @@ def make_timeline_section(
         return f"{round(seconds / 86400)} 天前"
 
     def _timeline_text(values: dict[str, Any]) -> str | None:
-        last = _last_user_epoch()
+        lg = values.get("log") or log
+        if lg is None:
+            return None  # 没日志可投影(构造/values 都没给)
+        last = _last_user_epoch(lg)
         if last is None:
             return None  # 还没跟真人说过话
-        clock = now_epoch or time.time
-        gap = max(0.0, clock() - last)
+        now = values.get("now_epoch", now_epoch)
+        if now is None:
+            ts = time.time()
+        elif callable(now):
+            ts = now()
+        else:
+            ts = float(now)
+        gap = max(0.0, ts - last)
         return f"[时间线] 距上次和主人说话: {_fmt(gap)}"
 
     return SystemSection(name=name, priority=priority, producer=_timeline_text)

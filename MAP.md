@@ -88,6 +88,13 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   (陪聊/自走 composer 的世界钟,0=真实墙钟)与 log 时间游标;补写回放判定
   收窄为"游标 **且** _backfill_clock 在转",故拨时钟的普通轮不被误判成补写。
   新测试 test_engine_clock.py(12 个测试文件全绿)。
+- **自走/心跳 = 补写同一事件算法 ✅(2026-09-07 用户拍板)**:普通自走轮
+  (心跳/脉冲/自走)触发时,引擎同款抽**时间预算**(`draw_budget_min`,
+  DEFAULT_DURATION_MIX),self composer 出现 `[时间预算] 这段时间约 X 分钟,
+  只做一件事、别做做不完的事`(措辞沿用 LIFE_BACKFILL §1.3 原文);lab 的
+  2 自走/回车与心跳/脉冲同路径。加上引擎装配补挂 **timeline 段**(VISION
+  决策 8 相对时间,"距上次和主人说话:X"),自走输入 = 绝对时间 + 相对时间
+  + 时间预算 三行俱全。
 - **gate 方案② ✅(2026-09 方向拍板)**:与补写同一原语(概率 = 每天期望 ×
   shape × Δt);**三个数值 ⏳ 待拍(cooldown / interval / wakes_per_day)**
 - 人设笔误史:曾把 BACKFILL 写成"16 岁女孩"(与 21 岁冲突),已修回 ——
