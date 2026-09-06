@@ -250,20 +250,30 @@ async def update_message(msg_id: int, body: MessageUpdate):
 
 @app.post("/autonomy/pulse")
 async def pulse_autonomy():
-    """手动触发一次自走轮:她独处想/做一轮,写入生活会话(_life)。"""
+    """手动触发一次自走轮:她独处想/做一轮,写给"最近激活的卡"(Yona 兜底)。
+
+    2026-09 每卡 life:不再有匿名生活会话 —— 目标卡 = store.life_target。
+    """
     if engine._loop is None:
         raise HTTPException(status_code=503, detail="引擎未启动")
-    log = engine._session_log(engine.LIFE_SESSION_ID)
+    sid = engine.life_session_id()
+    log = engine._store.load_log(sid)
     t0 = time.time()
     try:
         with engine._lock:
-            engine._loop.run_turn(source="self", log=log)
-            engine._store.save_log(engine.LIFE_SESSION_ID, log)
+            # 目标卡快照的人格覆盖(若有)在自走轮同样生效
+            snap = engine._store.get_session_settings(sid)
+            engine._loop.run_turn(
+                source="self", log=log,
+                system_prompt=(snap.get("system_prompt")
+                               if snap.get("system_prompt") else None),
+            )
+            engine._store.save_log(sid, log)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=500, detail=f"Autonomy pulse failed: {exc}"
         )
-    return {"elapsed_ms": int((time.time() - t0) * 1000)}
+    return {"elapsed_ms": int((time.time() - t0) * 1000), "session_id": sid}
 
 
 # 静态 UI(复用旧 Yona static/,契约原样)

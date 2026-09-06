@@ -4,9 +4,9 @@ thin router 拆分:workspace(桌面)/ agent-feed(内心活动)/ runtime/status
 这类端点不做任何"动作",只是**从事件日志投影出给人看的数据** —— 纯读取。
 
 核心思想(VISION 决策 2/3):状态与行为都从事件日志派生,不另存。
-- 动作轨迹 = 所有日志里的 tool/call + tool/result(她无论在哪触发,
-  陪聊轮还是独处轮,动手了就该在轨迹里可见 —— 观测优先)
-- 内心活动 = 生活日志(_life)里 source=self 轮的自语
+- 动作轨迹 = 所有卡片日志里的 tool/call + tool/result(观测优先,全局)
+- 内心活动 = **某张卡**的 chat.log 里 source=self 轮的自语(2026-09 每卡
+  life:面板跟随当前卡;session_id 缺省 = Yona 常驻旗舰)
 
 这些投影函数是纯函数(吃 store/日志),可以脱离 HTTP 单测。
 """
@@ -28,6 +28,13 @@ router = APIRouter()
 def _sse(obj: dict) -> str:
     """把一个对象变成一条 SSE 帧:`data: {json}\n\n`(浏览器按帧解析)。"""
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _target_card_id(session_id: str | None) -> str:
+    """观测缺省目标卡:显式给 → 用它;没给 → Yona 常驻旗舰。"""
+    if session_id:
+        return session_id
+    return engine._store.flagship_session_id()
 
 
 # ---------- 投影辅助(纯函数,可单测) ----------
@@ -66,10 +73,9 @@ def _first_arg_text(arguments: str) -> str:
 
 
 def all_action_trails() -> list[dict]:
-    """动作轨迹 = 所有日志(会话 + 生活)里的 tool/call + result。"""
+    """动作轨迹 = 所有卡片(含 Yona 与各角色卡)日志里的 tool/call + result。"""
     trails: list[dict] = []
-    log_ids = [s["id"] for s in engine._store.list_sessions()] \
-        + [engine.LIFE_SESSION_ID]
+    log_ids = [s["id"] for s in engine._store.list_sessions()]
     for lid in log_ids:
         log = engine._store.load_log(lid)
         for e in log.events:
@@ -89,9 +95,9 @@ def all_action_trails() -> list[dict]:
     return trails
 
 
-def self_talks() -> list[dict]:
-    """内心活动 = 生活日志里自走轮的自语(她独处时在想什么)。"""
-    log = engine._store.load_log(engine.LIFE_SESSION_ID)
+def self_talks(session_id: str) -> list[dict]:
+    """内心活动 = 某张卡自己 chat.log 里自走轮的自语(它独处时在想什么)。"""
+    log = engine._store.load_log(session_id)
     self_turns = {
         e.data["turn"] for e in log.events
         if e.type == "turn/start" and e.data.get("source") == "self"
@@ -112,7 +118,7 @@ def self_talks() -> list[dict]:
 
 @router.get("/workspace")
 async def get_workspace(session_id: str | None = None, limit: int = 18):
-    """桌面工作区:物件 = 空占位;动作轨迹 = 全日志 tool 派生;内心活动 = 自走自语。"""
+    """桌面工作区:动作轨迹 = 全卡片 tool 派生(全局);内心活动 = 该卡自语。"""
     trails = all_action_trails()
     trails.sort(key=lambda a: a["created_at"], reverse=True)
     actions = [
@@ -120,13 +126,14 @@ async def get_workspace(session_id: str | None = None, limit: int = 18):
          "created_at": x["created_at"]}
         for x in trails
     ]
-    talks = self_talks()
+    card_id = _target_card_id(session_id)
+    talks = self_talks(card_id)
     talks.sort(key=lambda ev: ev["created_at"], reverse=True)
     events = [
         {"created_at": x["created_at"], "content": x["text"]} for x in talks
     ]
     self_turn_count = sum(
-        1 for e in engine._store.load_log(engine.LIFE_SESSION_ID).events
+        1 for e in engine._store.load_log(card_id).events
         if e.type == "turn/start" and e.data.get("source") == "self"
     )
     return {
@@ -153,9 +160,9 @@ async def get_objects(limit: int = 18):
 
 
 @router.get("/admin/agent-feed")
-async def get_agent_feed(limit: int = 10):
-    """内心活动 = 生活日志里的自走轮自语。"""
-    talks = self_talks()
+async def get_agent_feed(session_id: str | None = None, limit: int = 10):
+    """内心活动 = 某张卡自己日志里的自走轮自语(UI 跟随当前会话)。"""
+    talks = self_talks(_target_card_id(session_id))
     talks.sort(key=lambda ev: ev["created_at"], reverse=True)
     events = [
         {"created_at": x["created_at"], "content": x["text"]} for x in talks

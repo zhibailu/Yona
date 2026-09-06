@@ -60,11 +60,11 @@ from ..params import (  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent.parent
 # 数据目录:默认 data/;YONA_DATA_DIR 可指到独立目录(验证/演示不脏真实数据)。
 DATA_DIR = Path(os.environ.get("YONA_DATA_DIR", str(ROOT / "data")))
-IMG_DIR = DATA_DIR / "images"
 
-# "生活"会话:她的自走轮(独处自语/动作)统一落这里,不进任何聊天会话。
-# 与"会话日志"并列的另一条流 —— 她活着是全局的,不隶属于某次聊天。
-LIFE_SESSION_ID = "_life"
+# 2026-09 每卡 life:不再有匿名全局 "_life" 生活流 —— 生活属于卡片本身,
+# 写进"最近激活的那张卡"的 chat.log(source=self);常驻保底旗舰卡 = Yona
+# (store.flagship_session_id,删了自动重建,先归档再重置)。target 解析见
+# engine.life_session_id() → store.life_target_session_id()。
 
 # (离线补写触发阈值 WAKE_AFTER_GAP_SECONDS 已收进 server/params.py)
 
@@ -277,10 +277,12 @@ class _TracingLLM:
 
 
 class LifeLoop:
-    """把 Heartbeat 的自走轮转发到全局 loop,并指定生活日志(_life)。
+    """把 Heartbeat 的自走轮转发到全局 loop,写给"最近激活的那张卡"。
 
-    Heartbeat 只认 `run_turn(source, tools, **kw)` 形状;这里补上 log 指向,
-    让自动心跳与手动脉冲写同一条生活流(workspace/agent-feed 都从它派生)。
+    2026-09 每卡 life:心跳醒来 = 那张卡醒着 —— 目标卡 = 最近有人聊过的
+    会话(store.life_target_session_id,Yona 兜底),自走事件写进它自己的
+    chat.log(source=self,聊天视图看不见);若该卡快照里有人格覆盖串,
+    自走轮也吃它的人格(卡片独处 = 卡片本人),否则旗舰。
     """
 
     def __init__(self, gate: ServerGate):
@@ -289,14 +291,19 @@ class LifeLoop:
     def run_turn(self, source="user", tools=None, self_note=None, **kw):
         t0 = time.time()
         tag = "情境自走" if self_note else "自走"
-        _live(f"她开始{tag}(source={source})…")
+        sid = life_session_id()
+        _live(f"她开始{tag}(卡片 {sid})(source={source})…")
         try:
-            log = _store.load_log(LIFE_SESSION_ID)
+            log = _store.load_log(sid)
             with _lock:
+                # 该卡快照的人格覆盖(若有)在自走轮同样生效
+                snap = _store.get_session_settings(sid)
                 result = _loop.run_turn(
-                    source=source, tools=tools, log=log, self_note=self_note
+                    source=source, tools=tools, log=log, self_note=self_note,
+                    system_prompt=(snap.get("system_prompt")
+                                   if snap.get("system_prompt") else None),
                 )
-                _store.save_log(LIFE_SESSION_ID, log)
+                _store.save_log(sid, log)
             self.gate.mark_self()  # 真跑了一轮 → 进入冷却
             _live(f"{tag}完成,耗时 {time.time() - t0:.1f}s")
             return result
@@ -453,34 +460,33 @@ def _wake_decision(
     )
 
 
-def _last_active_anywhere() -> float | None:
-    """她"上次有意识" = 所有日志(用户会话 + 生活)的最后活动时刻。
+def life_session_id() -> str:
+    """自走/补写/脉冲写给哪张卡 = 最近激活的卡,没有 = Yona(常驻旗舰)。
 
-    生活补写锚点**不能只看 _life**:用户会话里跟主人的对话也是她活着的证据
-    (她这个人跨会话一致,记忆不按"哪条流"分割)。进程死后没有任何流再长,
-    所以取全部日志里最后一条事件的时间,就是她离线前最后的意识。
+    2026-09 每卡 life:生活不再属于匿名全局流,而属于"正在和你说话的那张卡"。
     """
-    last: float | None = None
-    ids = [s["id"] for s in _store.list_sessions()] + [LIFE_SESSION_ID]
-    for lid in ids:
-        log = _store.load_log(lid)
-        if log.events and (last is None or log.events[-1].time > last):
-            last = log.events[-1].time
-    return last
+    if _store is None:
+        return ""
+    return _store.life_target_session_id()
 
 
 def _maybe_backfill_life() -> None:
-    """离线生活补写:离上次活跃超过阈值再启动 → 把离线期间的生活补进 _life。
+    """离线生活补写:目标卡离线超过阈值 → 把它离线期间的生活补进它自己。
 
-    收编进主 loop:补写轮 = 普通自走轮(log=_life),差异只在"log 设了时间游标"
-    —— 事件时间戳落历史时刻,世界时间(backfill_composer)报历史时刻,人格切到
-    补写视图。**没有第二个 AgentLoop**:同一个人、同一个 loop,只是时间在跳。
-    每段之间日志历史累积 → 逐段叙事连贯自发涌现。
+    收编进主 loop:补写轮 = 普通自走轮(写目标卡的 chat.log),差异只在
+    "log 设了时间游标" —— 事件时间戳落历史时刻,世界时间(backfill_composer)
+    报历史时刻,人格切到补写视图。**没有第二个 AgentLoop**:同一张卡、
+    同一个 loop,只是时间在跳。锚点 = 该卡日志尾部(卡与你的对话也是它活着的
+    证据);补写 = 目标卡醒来补日子,其它卡等下次被激活。
     """
+    sid = ""
+    last_active: float | None = None
     try:
-        last_active = _last_active_anywhere()
+        sid = life_session_id()
+        log = _store.load_log(sid)
+        last_active = log.events[-1].time if log.events else None
         trigger, reason, gap = _wake_decision(last_active)
-        print(f"[backfill] {reason}")
+        print(f"[backfill] 卡片 {sid}: {reason}")
         if not trigger:
             return
     except Exception as exc:  # noqa: BLE001
@@ -499,7 +505,9 @@ def _maybe_backfill_life() -> None:
                 return
             empty_tools = ToolRegistry([])  # 补写是"那段日子怎么过的",不该有实时工具
             with _lock:
-                life_log = _store.load_log(LIFE_SESSION_ID)
+                card_log = _store.load_log(sid)
+                snap = _store.get_session_settings(sid)
+                persona = snap.get("system_prompt") if snap.get("system_prompt") else None
                 for i, e in enumerate(events):
                     # 预算限制:budget(约 X 分钟)= "做一件做得完的事"的上限,
                     # 不是事件属性,不进日志,只当轮可见。
@@ -525,20 +533,20 @@ def _maybe_backfill_life() -> None:
                         "时间由系统给你,别自己报时间;不要写别的时间段的事。"
                         f"{gap_note}"
                     )
-                    life_log.set_time_cursor(e.start)
+                    card_log.set_time_cursor(e.start)
                     _backfill_clock["ts"] = e.start
                     try:
                         _loop.run_turn(
-                            source="self", log=life_log, tools=empty_tools,
-                            self_note=note,
+                            source="self", log=card_log, tools=empty_tools,
+                            self_note=note, system_prompt=persona,
                         )
                     finally:
-                        life_log.clear_time_cursor()
+                        card_log.clear_time_cursor()
                         _backfill_clock["ts"] = 0.0
                     _live(
                         f"补写 {time.strftime('%m-%d %H:%M', time.localtime(e.start))} …"
                     )
-                _store.save_log(LIFE_SESSION_ID, life_log)
+                _store.save_log(sid, card_log)
             if _life_gate is not None:
                 _life_gate.mark_self()  # 补写过 → 心跳进入冷却,节奏衔接
             f0 = time.strftime("%m-%d %H:%M", time.localtime(events[0].start))
@@ -609,8 +617,8 @@ def resolve_turn_settings(
 ) -> dict:
     """服务端缺省补齐(路线 B):读会话快照 → merge_turn_settings。
 
-    心跳/补写轮不经过这里(她们写 _life,无会话、永不套快照 —— 自走人格
-    永远是旗舰默认)。
+    **只用于聊天 user 轮**。心跳/补写/脉冲(每卡 life)不进这里 —— 它们由
+    LifeLoop/backfill 自己读目标卡快照的人格覆盖串(见上),其余字段用默认。
     """
     snap = _store.get_session_settings(session_id) if _store is not None else {}
     return merge_turn_settings(
@@ -652,8 +660,7 @@ def start() -> None:
     (聊天 503,心跳不起),UI 显示首启引导 —— .env 不再是产品配置。
     """
     global _store
-    IMG_DIR.mkdir(parents=True, exist_ok=True)
-    _store = SessionStore(DATA_DIR)
+    _store = SessionStore(DATA_DIR)  # 建目录制存储(含旧布局一次性迁移)
     cfg = load_runtime(DATA_DIR)
     if not cfg:
         print("[llm] 未配置 LLM 连接 —— 引擎禁用,等待 UI 首启引导(/admin/llm-config)")

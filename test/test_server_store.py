@@ -70,13 +70,35 @@ def test_update_message_content_is_replace():
 
 
 def test_persistence_roundtrip():
-    """会话落盘 → 重载:消息视图一致,遮蔽仍生效。"""
+    """会话落盘 → 重载:消息视图一致,遮蔽仍生效;Yona 常驻旗舰排第一。"""
     store, sid = _store_with_turn()
     store.delete_messages_from(sid, 2)
     store2 = SessionStore(store.sessions_dir.parent)  # 同一 data dir
     after = store2.get_session(sid)["messages"]
     assert after == []
-    assert store2.list_sessions()[0]["id"] == sid
+    ids = [s["id"] for s in store2.list_sessions()]
+    assert store2.flagship_session_id() == ids[0], "Yona 应常驻第一顺位"
+    assert sid in ids, "普通会话仍在列表"
+
+
+def test_flagship_recreated_after_delete_and_archived():
+    """删 Yona = 归档整袋 + 立即重建空 Yona(重置她)。"""
+    store = SessionStore(Path(tempfile.mkdtemp()))
+    yid = store.flagship_session_id()
+    log = store.load_log(yid)
+    log.append("turn/start", turn=1)
+    log.append("user/message", content=[{"type": "text", "text": "hello"}],
+               source="user", turn=1)
+    log.append("assistant/message", content=[{"type": "text", "text": "hi"}], turn=1)
+    log.append("turn/end", turn=1, reason={"kind": "completed"})
+    store.save_log(yid, log)
+    assert store.load_log(yid).events  # Yona 有历史
+    archived = store.delete_session(yid)  # 删 Yona → 归档
+    assert archived and "archive" in archived
+    new_yid = store.flagship_session_id()  # 保底:重建空 Yona
+    assert new_yid != yid
+    assert store.load_log(new_yid).events == []  # 新的从空白开始
+    assert store.get_session(yid) is None  # 旧档案已不在 sessions 下
 
 
 def test_self_turn_not_in_chat_view():
@@ -123,6 +145,7 @@ if __name__ == "__main__":
     test_delete_from_is_tail_cut_shadow()
     test_update_message_content_is_replace()
     test_persistence_roundtrip()
+    test_flagship_recreated_after_delete_and_archived()
     test_self_turn_not_in_chat_view()
     test_created_at_no_seconds_for_ui_slice()
     print("server/store all tests passed")

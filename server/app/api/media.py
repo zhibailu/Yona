@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ..engine import IMG_DIR
+from .. import engine
 
 router = APIRouter()
 
@@ -26,17 +26,19 @@ _bg_positions: dict[str, dict] = {}
 
 
 def _image_path(session_id: str, key: str):
-    """会话图片路径(data/images/{session_id}/{key}.jpg),带防穿越校验。"""
+    """卡片图片路径(sessions/<sid>/images/<key>.jpg),带防穿越校验。
+
+    2026-09 布局:图片跟卡走(一个会话一个目录,URL 契约不变)。
+    """
     if not _SESSION_ID_RE.fullmatch(session_id):
         raise HTTPException(status_code=400, detail="Invalid session_id")
     if key not in _IMAGE_KEYS:
         raise HTTPException(status_code=400, detail="Invalid key")
-    base = IMG_DIR.resolve()
-    d = (base / session_id).resolve()
-    if base not in d.parents:
-        raise HTTPException(status_code=400, detail="Invalid session_id")
-    d.mkdir(parents=True, exist_ok=True)
-    return d / f"{key}.jpg"
+    if engine._store is None:
+        raise HTTPException(status_code=503, detail="存储未就绪")
+    base = engine._store.images_dir(session_id).resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    return base / f"{key}.jpg"
 
 
 @router.get("/images/{session_id}/{key}")

@@ -39,6 +39,7 @@
                 localStorage.setItem('yona_session_id', currentSessionId);
                 document.getElementById('messages').innerHTML = '';
                 document.getElementById('current-title').textContent = data.title;
+                _setFeedHeading(data.title || '内心');
                 // 新会话 = 无快照 = 回旗舰/全局默认
                 if (typeof _applySessionSettings === 'function') _applySessionSettings({});
                 await loadSessions();
@@ -66,6 +67,7 @@
                 }
                 const data = await res.json();
                 document.getElementById('current-title').textContent = data.title || '未命名';
+                _setFeedHeading(data.title || '内心');
                 (data.messages || []).forEach(m => {
                     appendMessage(m.role, m.content, m.id, m.sensory || null);
                 });

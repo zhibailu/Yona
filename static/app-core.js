@@ -267,3 +267,9 @@
                 updateMeta();
             }
         }
+
+        function _setFeedHeading(title) {
+            // 2026-09 每卡 life:内心活动面板跟随当前卡(标题显示卡名)
+            const el = document.getElementById('feed-title');
+            if (el) el.textContent = (title && title !== '内心') ? `${title} 的内心` : '内心活动';
+        }
