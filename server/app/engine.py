@@ -504,11 +504,13 @@ def _build_engine(cfg: dict | None = None) -> None:
     wake_budget_section = SystemSection(
         name="wake_budget", priority=17, producer=_wake_budget_text)
 
+    # 陪聊轮 = 主人正在跟她说话:只给世界时刻([当前时间]),**不挂 [时间线]**
+    # —— 那是独处轮(自走/补写)看的:她一个人待着才需要"距上次和主人说话
+    # 多久"。正在聊天时组这条是噪音(2026-09 用户指出修正)。
     chat_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,
         situation=personas_mod.CHAT_SITUATION,
-        world_now=_live_clock,
-        extra_sections=[timeline_section])
+        world_now=_live_clock)
     self_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,
         situation=personas_mod.SELF_SITUATION,

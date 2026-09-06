@@ -155,6 +155,26 @@ def test_timeline_absent_when_no_user_history():
         eng._clock_override["ts"] = 0.0
 
 
+def test_no_timeline_on_chat_view():
+    """陪聊轮不挂 [时间线](2026-09 用户指出):正在跟主人说话,组"距上次
+    和主人说话"是噪音 —— 时间线是独处轮(自走/补写)看的。"""
+    eng._build_engine(dict(_FAKE_CFG))
+    t_user = _epoch(2026, 9, 7, 9, 0)
+    log = SessionLog("timeline-chat")
+    log.append("user/message", at=t_user, source="user", turn=1,
+               content=[{"type": "text", "text": "在吗"}])
+    eng._clock_override["ts"] = _epoch(2026, 9, 7, 13, 0)
+    try:
+        sections = eng.system_component_sections("user", log)
+        names = [n for n, _ in sections]
+        assert "timeline" not in names, names
+        # 同一份日志切到自走轮视图:时间线段应在(独处轮要"参考时间线")
+        names_self = [n for n, _ in eng.system_component_sections("self", log)]
+        assert "timeline" in names_self, names_self
+    finally:
+        eng._clock_override["ts"] = 0.0
+
+
 def test_wake_budget_section_appears_when_active():
     """普通轮时间预算(2026-09 用户拍板:自走/心跳/脉冲与补写同一事件算法,
     只是触发点不同 —— 普通轮也产'这段时间约 X 分钟'的预算)。
@@ -269,6 +289,7 @@ if __name__ == "__main__":
     test_cursor_with_backfill_clock_is_backfill_view()
     test_timeline_shows_gap_from_last_user_message()
     test_timeline_absent_when_no_user_history()
+    test_no_timeline_on_chat_view()
     test_wake_budget_section_appears_when_active()
     test_wake_budget_absent_when_zero()
     test_draw_budget_min_within_mix_bounds()

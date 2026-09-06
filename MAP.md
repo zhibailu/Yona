@@ -118,6 +118,11 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   与 SELF_TALK_PREFIX 同区;措辞沿用 LIFE_BACKFILL §1.3 原文,`{gap}` = 引擎
   算好的时长)。引擎 producer 每次 compose 现取 personas_mod 属性、只填时长;
   想改"怎么说"只改 personas 一处,引擎不写文案。
+- **[时间线] 只挂独处轮,不挂陪聊轮 ✅(2026-09 用户指出修正)**:陪聊轮正在
+  跟主人说话,`[时间线] 距上次和主人说话:X` 是噪音(要么"刚刚"要么历史残留
+  间隔,模型正在对话根本用不上)—— chat composer 撤掉 timeline 段。自走/
+  补写轮保留(她的 SELF_SITUATION 明写"参考时间线",独处才需要知道距上次
+  说话多久)。
 - **自走/补写情境合一(删 BACKFILL_SITUATION)✅(2026-09 用户拍板)**:用户
   改写 SELF_SITUATION = "现在是你自己的生活时间,参考时间线,生成符合生活现象
   的事件"—— 自走轮与补写轮在他语义里就是同一件事(同一 loop/同一 LifeSampler,
