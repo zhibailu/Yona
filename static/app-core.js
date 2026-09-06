@@ -26,6 +26,7 @@
             _refreshObjects();
             // 2026-09 任务4:speak/voice 开关已撤(无后端),onload 不再读它
             setupInput();
+            _watchSnapshotAutoSave();
         };
 
         // ========== 设置加载 ==========
@@ -128,6 +129,8 @@
             document.getElementById('max-rounds').value = defaultSettings.max_rounds || 20;
             document.getElementById('rounds-num').value = defaultSettings.max_rounds || 20;
             updateMeta();
+            // 2026-09 任务6:恢复默认 = 把本会话快照清掉(回旗舰/全局默认)
+            _scheduleSnapshotSave();
         }
 
         function getSettings() {
@@ -136,11 +139,13 @@
                 model: document.getElementById('model-select').value || undefined,
                 temperature: parseFloat(document.getElementById('temperature').value),
                 system_prompt: document.getElementById('system-prompt').value || undefined,
-                // max_rounds:上下文窗口(保留最近 N 轮,0 = 全量);2026-09 起真生效。
                 // max_tokens / enable_summarize 不再发送:输出上限固定 4096(params),
                 // 摘要压缩待 compact(都是 UI 不该改/还没接的,见 chat.py 字段注释)。
-                max_rounds: parseInt(document.getElementById('max-rounds').value) || null,
             };
+            // max_rounds = 上下文窗口(2026-09 真接线);注意 0 = 不限制是真值,
+            // 别用 || null 把它吞成默认 —— 那是两种语义
+            const rv = parseInt(document.getElementById('max-rounds').value, 10);
+            s.max_rounds = Number.isNaN(rv) ? null : rv;
             return s;
         }
 
@@ -185,5 +190,80 @@
                 if (stat) { stat.style.color = '#c0392b'; stat.textContent = e.message || String(e); }
             } finally {
                 if (btn) btn.disabled = false;
+            }
+        }
+
+        // ========== 会话快照(2026-09 任务6:每会话一组设定,自动+防抖)==========
+        // 三层:当轮(消息里手动改的)> 会话快照(meta.json)> 全局默认。
+        // 这里只管"快照"这一层:改动自动 PATCH;切会话时由 _applySessionSettings 回填。
+        let _snapshotTimer = null;
+        let _applyingSnapshot = false;
+
+        function _collectSnapshot() {
+            const s = {};
+            const t = parseFloat(document.getElementById('temperature').value);
+            if (Number.isFinite(t)) s.temperature = t;
+            const rv = parseInt(document.getElementById('max-rounds').value, 10);
+            if (!Number.isNaN(rv)) s.max_rounds = rv;   // 0 = 不限制,真存
+            const sp = (document.getElementById('system-prompt').value || '').trim();
+            if (sp) s.system_prompt = sp;               // 空 = 旗舰,不落键
+            const sel = document.getElementById('model-select');
+            if (sel && sel.value) s.model = sel.value;
+            return s;
+        }
+
+        function _scheduleSnapshotSave() {
+            if (!currentSessionId || _applyingSnapshot) return;
+            clearTimeout(_snapshotTimer);
+            _snapshotTimer = setTimeout(async () => {
+                const sid = currentSessionId;
+                const body = _collectSnapshot();
+                try {
+                    await fetch(`${API}/sessions/${sid}/settings`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ settings: body }),
+                    });
+                } catch (e) { console.warn('快照保存失败(会话还在,稍后自动重试)', e); }
+            }, 700);  // 防抖:停手 0.7s 才写盘
+        }
+
+        function _watchSnapshotAutoSave() {
+            const onInput = () => { if (!_applyingSnapshot) _scheduleSnapshotSave(); };
+            ['temperature', 'system-prompt', 'max-rounds', 'rounds-num']
+                .forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('input', onInput); });
+            const modelSel = document.getElementById('model-select');
+            if (modelSel) modelSel.addEventListener('change', onInput);
+        }
+
+        function _applySessionSettings(settings) {
+            // 切到某会话:把它快照的值回填到控件(不触发自动保存回写)
+            _applyingSnapshot = true;
+            try {
+                const s = settings || {};
+                const tempEl = document.getElementById('temperature');
+                const tempNum = (typeof s.temperature === 'number') ? s.temperature
+                    : (defaultSettings.temperature != null ? defaultSettings.temperature : 0.9);
+                tempEl.value = tempNum;
+                document.getElementById('temp-display').textContent = tempNum;
+
+                document.getElementById('system-prompt').value = s.system_prompt || '';
+
+                const rounds = (typeof s.max_rounds === 'number') ? s.max_rounds
+                    : (defaultSettings.max_rounds || 20);
+                document.getElementById('max-rounds').value = rounds;
+                document.getElementById('rounds-num').value = rounds;
+
+                const sel = document.getElementById('model-select');
+                if (sel) {
+                    const want = (s.model && Array.from(sel.options).some(o => o.value === s.model))
+                        ? s.model : (defaultSettings.model || sel.options[0]?.value || '');
+                    sel.value = want || '';
+                    document.getElementById('model-display').textContent = want || '未连接';
+                    if (want) localStorage.setItem('yona_model', want);
+                }
+            } finally {
+                _applyingSnapshot = false;
+                updateMeta();
             }
         }

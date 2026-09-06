@@ -89,6 +89,10 @@ LLM_DEFAULT_TEMPERATURE = 0.9
 #    会截断长回复/工具 JSON,调太高超模型上限直接 400);每个 step 各自受它限制
 LLM_OUTPUT_MAX_TOKENS = 4096
 
+# ✅ 2026-09 拍板:上下文窗口默认 = UI 旧默认 20 轮(保留最近 N 个已结束轮;
+#    UI 滑块 0-40,0 = 不限制;会话快照可覆盖,请求缺省用它)
+DEFAULT_CONTEXT_ROUNDS = 20
+
 
 # ============================================================
 # 参数全景打印(py server/params.py —— 像 dsh --dump-config)

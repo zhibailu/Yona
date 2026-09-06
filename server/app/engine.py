@@ -41,6 +41,7 @@ from .gate import ServerGate
 # 产品语义参数唯一来源 = server/params.py(带拍板状态;查看: py server/params.py)
 from ..params import (  # noqa: E402
     BACKFILL_START_DELAY_SEC,
+    DEFAULT_CONTEXT_ROUNDS,
     HEARTBEAT_COOLDOWN_SEC,
     HEARTBEAT_INTERVAL_SEC,
     HEARTBEAT_MAX_INTERVAL,
@@ -565,6 +566,57 @@ def resolve_model(candidate: str | None) -> str | None:
     if candidate and candidate in _models:
         return candidate
     return _model
+
+
+def merge_turn_settings(
+    snapshot: dict,
+    requested: dict | None = None,
+    *,
+    default_temperature: float = LLM_DEFAULT_TEMPERATURE,
+    default_rounds: int = DEFAULT_CONTEXT_ROUNDS,
+    default_model: str | None = None,
+    available_models: tuple = (),
+) -> dict:
+    """设置合并链(纯函数,2026-09 任务6 路线 B):当轮 > 会话快照 > 默认。
+
+    - requested 里**没给**(None)的字段才依次落快照/默认;显式给的永远优先。
+    - max_rounds 保留 0(=不限制)语义:0 不是"没给",直接透传。
+    - system_prompt:None = 旗舰默认;快照里存了覆盖串才覆盖。
+    - model:不在 available_models(当前连接可用列表) → 回 default_model
+      (连接换端点/模型下线时防呆,不会拿个幽灵模型去调)。
+    """
+    req = requested or {}
+
+    def pick(key, default):
+        v = req.get(key)
+        if v is None:
+            v = snapshot.get(key)
+        return default if v is None else v
+
+    model = pick("model", default_model)
+    if available_models and model not in available_models:
+        model = default_model
+    return {
+        "temperature": float(pick("temperature", default_temperature)),
+        "max_rounds": pick("max_rounds", default_rounds),
+        "system_prompt": pick("system_prompt", None),
+        "model": model,
+    }
+
+
+def resolve_turn_settings(
+    session_id: str, requested: dict | None = None
+) -> dict:
+    """服务端缺省补齐(路线 B):读会话快照 → merge_turn_settings。
+
+    心跳/补写轮不经过这里(她们写 _life,无会话、永不套快照 —— 自走人格
+    永远是旗舰默认)。
+    """
+    snap = _store.get_session_settings(session_id) if _store is not None else {}
+    return merge_turn_settings(
+        snap, requested or {},
+        default_model=_model, available_models=tuple(_models),
+    )
 
 
 def reconfigure_llm(cfg: dict) -> None:

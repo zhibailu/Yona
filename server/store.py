@@ -88,6 +88,28 @@ class SessionStore:
             f.unlink(missing_ok=True)
         return True
 
+    # ---------- 会话快照(2026-09 任务6:每个会话记住的一组设置) ----------
+    # 存进该会话自己的 meta.json(档案袋)settings 键 —— 与标题同文件,
+    # 不另开文件(防两个文件对不上)。形状 = {system_prompt?, temperature?,
+    # max_rounds?, model?},缺的键 = 跟随默认(合并见 engine.merge_turn_settings)。
+
+    def get_session_settings(self, session_id: str) -> dict:
+        """读会话快照(没有/损坏 = 空快照 = 全部跟随默认)。"""
+        meta = self._read_meta(session_id)
+        if not meta or not isinstance(meta.get("settings"), dict):
+            return {}
+        return dict(meta["settings"])
+
+    def set_session_settings(self, session_id: str, settings: dict) -> bool:
+        """整体替换会话快照(空 dict = 清空回默认)。"""
+        meta = self._read_meta(session_id)
+        if meta is None:
+            return False
+        meta["settings"] = settings
+        meta["updated_at"] = _now_iso()  # 动过设置 = 会话有动静,列表排序上前
+        self._write_meta(session_id, meta)
+        return True
+
     # ---------- 消息操作(转译成日志投影/遮蔽) ----------
 
     def _messages_view(self, session_id: str) -> list[dict]:

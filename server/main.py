@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from .app import engine
 from .app.api import chat, config, media, view
 from .app.engine import ROOT
-from .params import LLM_DEFAULT_TEMPERATURE, LLM_OUTPUT_MAX_TOKENS
+from .params import DEFAULT_CONTEXT_ROUNDS, LLM_DEFAULT_TEMPERATURE, LLM_OUTPUT_MAX_TOKENS
 
 
 # 生命周期
@@ -99,7 +99,7 @@ async def get_context_sources():
     # 已删 —— 显示即真相,不给假默认(见 DESIGN §9 / STRUCTURE §4)。
     return [
         {"source_id": "sliding_window", "priority": 10, "enabled": True,
-         "config": {"max_rounds": 20}},
+         "config": {"max_rounds": DEFAULT_CONTEXT_ROUNDS}},
     ]
 
 
@@ -141,6 +141,64 @@ async def update_session(session_id: str, body: SessionUpdate):
     if not ok:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}
+
+
+# ---------- 会话快照(2026-09 任务6:每个会话记住的一组设置) ----------
+
+class SessionSettingsIn(BaseModel):
+    settings: dict = Field(default_factory=dict)  # 整体替换;{} = 清空回默认
+
+
+def _clean_settings(raw: dict) -> dict:
+    """白名单 + 类型/范围校验(脏字段静默丢弃,非法值 400)。"""
+    clean: dict = {}
+    t = raw.get("temperature")
+    if t is not None:
+        try:
+            t = float(t)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="temperature 不是数字")
+        if not 0.0 <= t <= 2.0:
+            raise HTTPException(status_code=400, detail="temperature 超出 0-2")
+        clean["temperature"] = round(t, 2)
+    r = raw.get("max_rounds")
+    if r is not None:
+        try:
+            r = int(r)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="max_rounds 不是整数")
+        if not 0 <= r <= 40:
+            raise HTTPException(status_code=400, detail="max_rounds 超出 0-40")
+        clean["max_rounds"] = r  # 0 = 不限制,合法
+    sp = raw.get("system_prompt")
+    if sp is not None:
+        if not isinstance(sp, str) or len(sp) > 4000:
+            raise HTTPException(status_code=400, detail="system_prompt 非法或超长")
+        sp = sp.strip()
+        if sp:
+            clean["system_prompt"] = sp  # 空串 = 清掉(旗舰),不落键
+    m = raw.get("model")
+    if m is not None:
+        if not isinstance(m, str) or not m or len(m) > 120:
+            raise HTTPException(status_code=400, detail="model 非法")
+        # 防呆:连接已配置时必须属于当前端点可用列表(连接没配置时先存着,
+        # 合并时 resolve 也会回默认)
+        if engine._models and m not in engine._models:
+            raise HTTPException(status_code=400,
+                                detail=f"模型 {m} 不在当前连接可用列表")
+        clean["model"] = m
+    return clean
+
+
+@app.patch("/sessions/{session_id}/settings")
+async def update_session_settings(session_id: str, body: SessionSettingsIn):
+    """整体替换该会话快照(UI 防抖自动存;{} = 清空回默认)。"""
+    clean = _clean_settings(body.settings or {})
+    with engine._lock:
+        ok = engine._store.set_session_settings(session_id, clean)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"ok": True, "settings": clean}
 
 
 @app.delete("/sessions/{session_id}")

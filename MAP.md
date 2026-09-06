@@ -32,7 +32,7 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
 ### P0-P4 · 内核与会话(09-02/03,旧条目 0-18)
 事件日志 / 单循环 / 工具三件套 / 流式+chunk / SYSTEM 装配(builder)/ surface
 (shadow+replace)/ 心跳(source=self)/ 会话存储 + thin router + 旧 UI 复用。
-落点:`core/`、`server/store.py`、`character/`。9 个测试文件自此建立(2026-09 加 test_llm_setup → 10)。
+落点:`core/`、`server/store.py`、`character/`。9 个测试文件自此建立(2026-09 加 test_llm_setup/test_snapshot → 11)。
 
 ### S1 · 离线生活补写(09-04,大段拍板史)
 - **醒来轮 v1 废弃**(旧条目 19):"开机补一句话"= 假体验。
@@ -76,7 +76,7 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
 - **端点**:24 个(实测 `routes` 数),契约与旧 UI 对齐;聊天 SSE
   (token/tool_status/busy/done)、治理(shadow/replace)、观测
   (workspace/agent-feed/runtime)、图片/背景、会话 CRUD。
-- **测试**:10 个测试文件全绿(`test/test_*.py`,Mock + 真模型双路可跑)。
+- **测试**:11 个测试文件全绿(`test/test_*.py`,Mock + 真模型双路可跑)。
 - **探针/工具**:`backfill_probe`(dist/inv/table/real)、`backfill_scan`、
   `k_compare`(K 对比)、`gate_probe`(心跳闸门蒙特卡洛)、`rate_curve.py` +
   `rate_curve_plot.py`(→ `assets/design/rate_curve.png`)、`route_table.py`
@@ -96,19 +96,25 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   字段保留占位);/settings 回真实默认(显示即真相)。
 - **UI**:温度滑块/角色设定/轮数滑块真生效;Token 预算滑块撤为只读说明;
   摘要开关置灰占位(compact 后解锁)。
-- **验证**:10 测试文件全绿 + 真模型 SSE 冒烟(kinds = text/finish/usage,
+- **验证**:11 测试文件全绿 + 真模型 SSE 冒烟(kinds = text/finish/usage,
   usage 数值正确)。
 - **协议决策(2026-09,记录不实现)**:单 chat/completions 适配,adapter 缝在
   `core/llm.py`;responses/Anthropic 等 = 将来独立任务(见 DESIGN §11)。
 - **连接管理(2026-09 任务③)**:`.env` 不再是产品配置 —— 唯一入口 = UI
   首启向导(`/admin/llm-config` 测通→落盘 `data/llm.local.json`→引擎热重配
   免重启);模型下拉 = 当前端点可用列表,下拉切换 = 同端点换 model id
-  (`run_turn` 可选字段,列表内校验);未连接 = 引擎禁用待引导。10 个测试
+  (`run_turn` 可选字段,列表内校验);未连接 = 引擎禁用待引导。11 个测试
   文件全绿 + 进程内真模型冒烟(建引擎→切 pro→usage 锚点)。
 - **任务 4/5(2026-09,纯 UI 收口)**:感官三按钮(发图/语音/朗读)+ 视觉
   粘贴/拖图通道 + 空壳 action 菜单 + 舞台"桌面物件"pane 全部从 UI 撤除并
   断掉调用链(sendMessage 不再造附件/不走语音钩子、done 分支不再等物件);
   死代码留在 `app-objects-sensory.js` 冻结区(文件头已标注),感官接回时复用。
+- **任务 6 · 会话快照(2026-09,用户拍板"塞进档案袋")**:三层合并链
+  当轮 > 会话快照 > 默认(`engine.merge_turn_settings` 纯函数,路线 B 服务端
+  补齐);四件套 {人格覆盖/温度/轮数/model};快照存 `{sid}.meta.json` 的
+  settings 键(`PATCH /sessions/{sid}/settings`,{} = 清空);UI 自动+防抖
+  保存、切会话回填、恢复默认 = 清快照;预设 = 命名快照(应用 = 复制进快照)。
+  自走/补写永不套快照。DESIGN §12 权威,测试 test_snapshot.py。
 
 ---
 

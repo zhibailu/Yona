@@ -100,20 +100,24 @@ async def chat_stream(request: Request, body: ChatRequest):
                 engine._live(f"拿到引擎,排队共 {time.time() - t_wait0:.1f}s,开始回复")
             t_turn0 = time.time()
             try:
-                # 产品旋钮(2026-09 真接线,core/loop.run_turn 可选字段):
-                # - temperature:UI 滑块,每轮覆盖(缺省 = params 默认 0.9)
-                # - max_rounds:上下文窗口(保留最近 N 轮;0 = 全量)
-                # - system_prompt:角色设定(留空 = 旗舰小夜子;填写 = 本轮起覆盖)
-                # - max_tokens 不上传:输出上限固定 4096(server/params.py),
-                #   用户不该改;enable_summarize 同理 —— schema 字段保留,
-                #   等 compact 落地再接(见 DESIGN §9),现在不传 = 占位。
+                # 产品旋钮(2026-09 真接线 + 任务6 路线 B):
+                # - 当轮显式传的 > 会话快照 > 全局默认(engine.resolve_turn_settings)
+                # - temperature/max_rounds/system_prompt/model 四件套同一合并链
+                # - max_tokens 不上传:输出上限固定 4096(server/params.py);
+                #   enable_summarize 同理(schema 占位,等 compact,见 DESIGN §9)
                 prompt = (body.system_prompt or "").strip()
+                eff = engine.resolve_turn_settings(sid, {
+                    "temperature": body.temperature,
+                    "max_rounds": body.max_rounds,
+                    "system_prompt": prompt or None,
+                    "model": body.model,
+                })
                 engine._loop.run_turn(
                     message, source="user", log=log, on_chunk=on_chunk,
-                    temperature=body.temperature,
-                    model=engine.resolve_model(body.model),  # 只认当前端点可用列表
-                    max_rounds=body.max_rounds,
-                    system_prompt=prompt or None,
+                    temperature=eff["temperature"],
+                    model=eff["model"],
+                    max_rounds=eff["max_rounds"],
+                    system_prompt=eff["system_prompt"],
                 )
                 engine._store.save_log(sid, log)
                 engine._store.touch_session(sid)

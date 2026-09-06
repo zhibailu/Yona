@@ -39,6 +39,8 @@
                 localStorage.setItem('yona_session_id', currentSessionId);
                 document.getElementById('messages').innerHTML = '';
                 document.getElementById('current-title').textContent = data.title;
+                // 新会话 = 无快照 = 回旗舰/全局默认
+                if (typeof _applySessionSettings === 'function') _applySessionSettings({});
                 await loadSessions();
                 setStatus('新会话已创建');
             } catch (e) {
@@ -67,6 +69,10 @@
                 (data.messages || []).forEach(m => {
                     appendMessage(m.role, m.content, m.id, m.sensory || null);
                 });
+                // 2026-09 任务6:该会话的快照(若有)回填到设置控件
+                if (typeof _applySessionSettings === 'function') {
+                    _applySessionSettings(data.settings || {});
+                }
                 // 加载该会话绑定的图片配置
                 await _loadSessionImages();
             } catch (e) {
