@@ -81,6 +81,13 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   character.personas + eng._build_engine 重建),打印 SYSTEM 组件拆分 +
   完整 messages 输入后真跑;自走轮按键手动触发,补写窗口模拟(b)落历史
   时间戳;`--preview` 零花费看输入。`test/prompt_lab.py` 为转发壳。
+- **虚拟时钟(实验台拨"当前时间")✅(2026-09-07,用户三提后拍板)**:lab 可
+  "篡改当前时间"—— 每次运行/清空锚到**今天上午 9 点**,跑自走轮(2)或按 v
+  先打印参照(日志里最近一轮/事件的末时间),再输入假冒时间(HH:MM 默认不
+  跨天;可 +2h 相对 / 09-08 09:00 跨天)。引擎侧新增 `_clock_override["ts"]`
+  (陪聊/自走 composer 的世界钟,0=真实墙钟)与 log 时间游标;补写回放判定
+  收窄为"游标 **且** _backfill_clock 在转",故拨时钟的普通轮不被误判成补写。
+  新测试 test_engine_clock.py(12 个测试文件全绿)。
 - **gate 方案② ✅(2026-09 方向拍板)**:与补写同一原语(概率 = 每天期望 ×
   shape × Δt);**三个数值 ⏳ 待拍(cooldown / interval / wakes_per_day)**
 - 人设笔误史:曾把 BACKFILL 写成"16 岁女孩"(与 21 岁冲突),已修回 ——
@@ -95,7 +102,7 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
 - **端点**:24 个(实测 `routes` 数),契约与旧 UI 对齐;聊天 SSE
   (token/tool_status/busy/done)、治理(shadow/replace)、观测
   (workspace/agent-feed/runtime)、图片/背景、会话 CRUD。
-- **测试**:11 个测试文件全绿(`test/test_*.py`,Mock + 真模型双路可跑)。
+- **测试**:12 个测试文件全绿(`test/test_*.py`,Mock + 真模型双路可跑)。
 - **探针/工具**:`backfill_probe`(dist/inv/table/real)、`backfill_scan`、
   `k_compare`(K 对比)、`gate_probe`(心跳闸门蒙特卡洛)、`rate_curve.py` +
   `rate_curve_plot.py`(→ `assets/design/rate_curve.png`)、`route_table.py`

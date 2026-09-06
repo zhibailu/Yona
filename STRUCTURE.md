@@ -35,7 +35,7 @@ yona-rewrite/
 ├─ character/   旗舰角色层(小夜子:persona/state/tools,依赖 core)
 ├─ static/      旧 Yona UI 复用(零构建;仅剪 404 死按钮,死文件在 _unused/,见 §4)
 ├─ assets/design/  设计资产 PNG(rate_curve.png 等;生成脚本 test/rate_curve_plot.py 直出此目录)
-├─ test/        测试(11 文件,2026-09 加 llm_setup/snapshot)+ 探针 + 绘图脚本 + legacy/(早期演示,见 §6)
+├─ test/        测试(12 文件,2026-09 加 llm_setup/snapshot/engine_clock)+ 探针 + 绘图脚本 + legacy/(早期演示,见 §6)
 ├─ data/        运行数据:会话日志 + _life + images(gitignore,不入库)
 ├─ config.py    .env 加载(单模型 LLM_BASE_URL/API_KEY/MODEL)
 ├─ DESIGN.md / VISION.md / MAP.md / STRUCTURE.md / LIFE_BACKFILL.md

@@ -77,6 +77,11 @@ _life_gate: "ServerGate | None" = None  # 补写/心跳跑完也 mark_self,节�
 # 回放轮世界时钟:补写轮跑之前设为 slot 起点,backfill_composer 的 world section
 # 每 step 现取它 —— 模型看到的时间 = 历史时刻,墙钟不混入。仅在回放轮内被设。
 _backfill_clock: dict[str, float] = {"ts": 0.0}
+# 实验台/演示"当前时间"覆盖(prompt_lab 注入间隔/时刻用,2026-09):ts>0 时,
+# 陪聊/自走 composer 的世界 section 报它,而非墙钟 —— 仍是单时间源,只是源被拨过。
+# 产品路径从不设它(恒 0 = 真实墙钟);与 _backfill_clock 分开:回放轮的世界钟
+# 跟历史游标走(补写),普通轮的"现在"才读这里。
+_clock_override: dict[str, float] = {"ts": 0.0}
 _lock = threading.Lock()  # 全局引擎锁(loop 内部已有 turn 锁,这里护 store 落盘)
 # LLM 连接状态(2026-09 任务③ 连接管理):运行时配置的进程内影子 ——
 # 谁连的(base_url)/默认模型/该端点可用模型列表。key 只进 _build_engine,不出 HTTP。
@@ -367,13 +372,21 @@ def _build_engine(cfg: dict | None = None) -> None:
     # 一份 PERSONA 常驻,三种轮只换"情境段"(2026-09 拍板修正:
     # 人设 ≠ 轮的属性 —— 陪聊/自走/补写是同一个她,不是三个人)。
     # 文案现取 personas_mod.*:改文案后 reload + 重建引擎即生效。
+    # 世界时间源(2026-09 实验台/演示):普通轮(陪聊/自走)读 _clock_override
+    # (实验台可拨"当前时间";0 = 真实墙钟,产品路径不设),补写轮读回放游标。
+    def _live_clock():
+        ts = _clock_override["ts"]
+        return time.localtime(ts) if ts else time.localtime()
+
     chat_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,
-        situation=personas_mod.CHAT_SITUATION)
+        situation=personas_mod.CHAT_SITUATION,
+        world_now=_live_clock)
     self_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,
-        situation=personas_mod.SELF_SITUATION)
-    # 补写回放轮:世界时间 = log 的时间游标(历史时刻),不是墙钟
+        situation=personas_mod.SELF_SITUATION,
+        world_now=_live_clock)
+    # 补写回放轮:世界时间 = 回放游标(历史时刻),不是墙钟/当前覆盖
     backfill_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,
         situation=personas_mod.BACKFILL_SITUATION,
@@ -385,9 +398,11 @@ def _build_engine(cfg: dict | None = None) -> None:
     _composers["backfill"] = backfill_composer
 
     def sys_by_source(registry, source, log=None):
-        # 三参 builder:回放轮(log 设了时间游标)用补写视图 —— 世界时间=游标,
-        # 人格=正在过普通一天的她;普通轮按 source 用实时视图(墙钟)。
-        if log is not None and log.time_cursor is not None:
+        # 三参 builder:回放轮 = 时间游标 **且** 补写钟在转(engine 产品补写/lab 补写
+        # 模拟都同时设两者)—— 用补写视图(世界时间=历史游标)。实验台"拨当前时间"
+        # 的普通轮只设 log 游标(给事件盖时间戳),_backfill_clock 恒 0 → 不算回放,
+        # 走陪聊/自走实时视图(世界时间=_clock_override)。(2026-09 判定收窄)
+        if log is not None and log.time_cursor is not None and _backfill_clock["ts"]:
             return backfill_composer.compose(
                 {**personas_mod.VALUES, "registry": registry})
         composer = self_composer if source == "self" else chat_composer
@@ -423,7 +438,10 @@ def system_component_sections(
     只是按段标名渲染出来 —— 看 persona/situation/world/state/tool_usages
     各是谁、边界在哪。渲染仍是段自身的 render(values),不写日志。
     """
-    mode = "backfill" if (log is not None and log.time_cursor is not None) \
+    # 与 sys_by_source 同一判定(2026-09 收窄):回放轮 = 游标 **且** 补写钟在转;
+    # 实验台"拨当前时间"的普通轮(只设游标)按 source 显示陪聊/自走视图。
+    mode = "backfill" if (log is not None and log.time_cursor is not None
+                          and _backfill_clock["ts"]) \
         else ("self" if source == "self" else "chat")
     composer = _composers.get(mode)
     if composer is None:

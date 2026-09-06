@@ -14,7 +14,12 @@
 - 每次真实调用前打印 **SYSTEM 组件拆分**(persona/situation/world/state/
   tool_usages,来自引擎真实 composer)+ 完整 messages;调用后流式打印输出。
 - **自走轮手动触发**:按键即"心跳此刻醒来";回车 = 无情境(引擎纯心跳
-  占位),输入一句话 = 情境自走。时间 = 真实墙钟(引擎单时间源,VISION 决策 8)。
+  占位),输入一句话 = 情境自走。
+- **虚拟时钟 = 可注入间隔/时刻(2026-09 用户三提后拍板玩法)**:每次运行/
+  清空,时钟锚到今天上午 9 点;跑自走轮(2)前先打印参照 = 日志里最近
+  一轮/事件的末时间,再输入你决定的假冒时间(如 23:30 / +2h / 09-08 09:00),
+  默认不跨天。引擎世界 section 与事件时间戳都跟着拨 —— 测"刚聊完 vs 久别"
+  两种自走效果就是拨不同的时刻(单时间源被拨,仍是引擎那条钟)。
 - **补写窗口模拟**(b):选 她最后活跃 → 补写到此刻,LifeSampler 采样,逐件
   `set_time_cursor` 以历史时刻回放(引擎同款 note/空工具/时间游标),日志里
   落下**带历史时间戳的自语**;之后 1 陪聊即见"孤立 assistant 被打前缀+时间戳"。
@@ -24,7 +29,8 @@
 
 菜单:
   1 陪聊轮    2 自走轮    3 输入预览    b 补写模拟
-  t 自语前缀  m 换模型    w 上下文窗口  c 清空历史  q 退出
+  v 注入时刻  t 自语前缀  m 换模型      w 上下文窗口
+  c 清空历史   q 退出
 """
 
 from __future__ import annotations
@@ -71,8 +77,114 @@ _log = SessionLog("prompt-lab")   # 本实验台的"会话卡";loop/工具/人�
 _model = (_cfg.get("model") or "").strip() or ""
 _max_rounds: int | None = None    # None=全量
 _prefix_mode = "file"             # file | off | 〔自语〕 | 〔自语·{time}〕(演示)
+# 虚拟时钟偏移(2026-09 用户三提后拍板的玩法):实验台"篡改当前时间"——
+# 虚拟当前时刻 = time.time() + offset。每次运行/清空后锚到**今天上午 9 点**,
+# 测自走轮前先打印日志尾巴(最近一轮末事件时间)作参照,再输入假冒时间。
+# 引擎侧挂接:eng._clock_override["ts"](世界 section 的钟)+ log 时间游标
+# (事件盖虚拟时间戳)—— 改的仍是引擎单时间源,不是另起一套钟。
+_clock_offset: float = 0.0
 
 _MODELS = [m for m in (_cfg.get("models") or []) if isinstance(m, str)] or [_model]
+
+
+def _vnow() -> float:
+    """虚拟当前时刻(epoch 秒);offset=0 时 = 真实墙钟。"""
+    return time.time() + _clock_offset
+
+
+def _anchor_morning() -> None:
+    """锚定虚拟时钟:让"现在" = 今天上午 9 点(每次运行/清空后调)。"""
+    global _clock_offset
+    now_dt = datetime.fromtimestamp(time.time())
+    today_09 = now_dt.replace(hour=9, minute=0, second=0, microsecond=0)
+    _clock_offset = today_09.timestamp() - time.time()
+
+
+def _apply_clock(log) -> None:
+    """把虚拟当前时刻推进引擎:世界 section 的钟 + 事件盖时间戳的游标。"""
+    eng._clock_override["ts"] = _vnow()
+    log.set_time_cursor(_vnow())
+
+
+def _clear_clock(log) -> None:
+    """跑完一轮,撤掉虚拟钟(引擎回真实墙钟;游标清掉,后面 append 恢复默认)。"""
+    eng._clock_override["ts"] = 0.0
+    log.clear_time_cursor()
+
+
+def _tail_time(log) -> float | None:
+    """日志尾巴时间:最近一轮(对话或事件)的最末事件时间;空日志=None。"""
+    if not log.events:
+        return None
+    return log.events[-1].time
+
+
+def _parse_fake(text: str) -> float | None:
+    """解析假冒时间 → epoch;解析失败/空打印提示并返回 None。
+
+    支持:
+      HH:MM          今天(当前虚拟日,默认不跨天)
+      MM-DD HH:MM    今年某天(可跨天)
+      YYYY-MM-DD HH:MM  绝对(可跨年)
+      +90m / +2h / +3d  相对当前虚拟时刻往后拨(注入"间隔"的快捷写法)
+    """
+    text = text.strip()
+    if not text:
+        return None
+    vnow = _vnow()
+    # 相对注入:+N m/h/d
+    rel = text[1:] if text.startswith("+") else ""
+    if text.startswith("+") and len(rel) >= 2 and rel[-1] in "mhd":
+        try:
+            n = float(rel[:-1])
+        except ValueError:
+            n = -1.0
+        unit = {"m": 60.0, "h": 3600.0, "d": 86400.0}[rel[-1]]
+        if n > 0:
+            return vnow + n * unit
+    vdt = datetime.fromtimestamp(vnow)
+    for fmt in ("%Y-%m-%d %H:%M", "%m-%d %H:%M", "%H:%M"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            if fmt == "%H:%M":
+                dt = dt.replace(year=vdt.year, month=vdt.month, day=vdt.day)
+            elif fmt == "%m-%d %H:%M":
+                dt = dt.replace(year=vdt.year)
+            return dt.timestamp()
+        except ValueError:
+            continue
+    print("时间格式没看懂,示例: 11:30(今天)/ +2h(相对)/ 09-08 09:00 / "
+          "2026-09-08 09:00")
+    return None
+
+
+def _inject_time(log=None) -> None:
+    """注入假冒时间(自走轮测试前/随时 v 用):先打印参照 = 最近一轮/事件的
+    末时间(虚拟时钟),再按你的输入拨钟。回车 = 沿用现有虚拟时钟。"""
+    global _clock_offset
+    log = log if log is not None else _log
+    print("\n── 注入时刻(篡改当前时间,默认不跨天)──")
+    tail = _tail_time(log)
+    if tail is None:
+        print(f"  · 日志还没有事件 · 当前虚拟时钟 {_fmt_ts(_vnow())}")
+    else:
+        print(f"  · 参照:最近一轮/事件的末时间 = {_fmt_ts(tail)}(虚拟时钟)")
+        print(f"  · 相对现在约 {_human_gap(max(0.0, _vnow() - tail))}")
+    text = input("  假冒当前时间(回车=沿用; 例 23:30 / +2h / 09-08 09:00 / "
+                 "真实): ").strip()
+    low = text.lower()
+    if not text:
+        print(f"  → 保持 {_fmt_ts(_vnow())}")
+        return
+    if low in ("真实", "now", "wall"):
+        _clock_offset = 0.0
+        print("  → 已回真实墙钟")
+        return
+    ts = _parse_fake(text)
+    if ts is None:
+        return
+    _clock_offset = ts - time.time()
+    print(f"  → 虚拟时钟 → {_fmt_ts(_vnow())}")
 
 
 def _rebuild() -> None:
@@ -190,39 +302,54 @@ def _stream_cb(chunk: dict) -> None:
 
 def _run_turn(source: str, user_input: str | None = None, self_note: str | None = None,
               log=None) -> None:
-    """用**引擎真实 loop**(eng._loop)跑一轮;LLM 报错只报一句不炸台。"""
+    """用**引擎真实 loop**(eng._loop)跑一轮;LLM 报错只报一句不炸台。
+
+    虚拟时钟(2026-09):非补写回放时,先把引擎世界钟拨到 _vnow()、给 log 盖
+    虚拟时间游标 —— 这轮的事件/自语时间戳都落在虚拟时刻,跑完撤掉(引擎回墙钟)。
+    补写回放轮例外:游标与 _backfill_clock 已由调用方(_run_backfill)设好,不碰。
+    """
     log = log if log is not None else _log
-    tag = {"self": "自走轮", "user": "陪聊轮"}.get(source, source)
-    clock = _fmt_ts(time.time())
-    print(f"\n===== {tag} · {_model or '(默认)'} · 墙钟 {clock} · "
-          f"前缀={_effective_prefix() or '(空)'} =====")
+    replaying = bool(eng._backfill_clock["ts"])  # 补写回放:游标归调用方管
+    if not replaying:
+        _apply_clock(log)
     try:
-        msgs = _build_messages(source, log)
-    except Exception as exc:  # noqa: BLE001
-        msgs = []
-        print(f"(预览失败:{exc})")
-    print_messages(msgs, source, log)
-    print("────── 输出 ──────")
-    try:
-        result = eng._loop.run_turn(
-            user_input=user_input, source=source, log=log,
-            self_note=self_note, on_chunk=_stream_cb,
-            model=(_model or None), max_rounds=_max_rounds,
-        )
-        print()
-        usage = None
-        for e in reversed(log.events):
-            if e.type == "assistant/message" and e.data.get("turn") == result.turn:
-                usage = e.data.get("usage")
-                break
-        u = usage or {}
-        print(f"──── 完成: {result.reason.get('kind')} · "
-              f"{u.get('input_tokens', '?')} in / {u.get('output_tokens', '?')} out "
-              f"(回合 {result.turn}, {result.steps} 步) ────")
-    except KeyboardInterrupt:
-        print("\n(中断)")
-    except Exception as exc:  # noqa: BLE001
-        print(f"\n⚠ LLM 调用失败(回菜单可继续): {exc}")
+        tag = {"self": "自走轮", "user": "陪聊轮"}.get(source, source)
+        if replaying:
+            clock_ts, clock_tag = eng._backfill_clock["ts"], "回放"
+        else:
+            clock_ts, clock_tag = _vnow(), ("虚拟" if _clock_offset else "真实")
+        print(f"\n===== {tag} · {_model or '(默认)'} · {clock_tag}时钟 "
+              f"{_fmt_ts(clock_ts)} · 前缀={_effective_prefix() or '(空)'} =====")
+        try:
+            msgs = _build_messages(source, log)
+        except Exception as exc:  # noqa: BLE001
+            msgs = []
+            print(f"(预览失败:{exc})")
+        print_messages(msgs, source, log)
+        print("────── 输出 ──────")
+        try:
+            result = eng._loop.run_turn(
+                user_input=user_input, source=source, log=log,
+                self_note=self_note, on_chunk=_stream_cb,
+                model=(_model or None), max_rounds=_max_rounds,
+            )
+            print()
+            usage = None
+            for e in reversed(log.events):
+                if e.type == "assistant/message" and e.data.get("turn") == result.turn:
+                    usage = e.data.get("usage")
+                    break
+            u = usage or {}
+            print(f"──── 完成: {result.reason.get('kind')} · "
+                  f"{u.get('input_tokens', '?')} in / {u.get('output_tokens', '?')} out "
+                  f"(回合 {result.turn}, {result.steps} 步) ────")
+        except KeyboardInterrupt:
+            print("\n(中断)")
+        except Exception as exc:  # noqa: BLE001
+            print(f"\n⚠ LLM 调用失败(回菜单可继续): {exc}")
+    finally:
+        if not replaying:
+            _clear_clock(log)
 
 
 def _run_backfill() -> None:
@@ -282,16 +409,20 @@ def _run_backfill() -> None:
 
 def _menu() -> None:
     print("\n" + "─" * 60)
+    tag = "真实墙钟" if not _clock_offset else "虚拟时钟"
     print(f"模型 {_model or '(引擎默认)'} · 窗口 {_max_rounds or '全量'} · "
-          f"自语前缀 {_effective_prefix() or '(空)'}")
+          f"自语前缀 {_effective_prefix() or '(空)'} · 现在 {_fmt_ts(_vnow())}({tag})")
     print("1 陪聊轮   2 自走轮   3 输入预览   b 补写模拟")
-    print("t 前缀     m 模型    w 窗口   c 清空历史   q 退出")
+    print("v 注入时刻  t 前缀     m 模型      w 窗口")
+    print("c 清空历史  q 退出")
 
 
 def main() -> None:
     global _log, _model, _max_rounds, _prefix_mode
+    _anchor_morning()  # 每次运行:从今天上午 9 点开始(用户拍板)
     _rebuild()
     if "--preview" in sys.argv:
+        eng._clock_override["ts"] = _vnow()  # 预览也落在 09:00 起的虚拟时钟
         print("=== 输入预览(不调模型)· user 轮(你说:在吗) ===")
         print_messages(_build_messages("user", _log), "user", _log)
         _prefix_mode = "file"
@@ -299,7 +430,8 @@ def main() -> None:
         print_messages(_build_messages("self", _log), "self", _log)
         return
 
-    print("小夜子提示词实验台 · 驱动真实引擎 · 改 personas.py 后下一轮自动重建")
+    print(f"小夜子提示词实验台 · 驱动真实引擎 · 虚拟时钟今天 09:00 起"
+          f"(2 自走轮 / v 可注入时刻)")
     while True:
         _menu()
         try:
@@ -318,8 +450,12 @@ def main() -> None:
             _run_turn("user", user_input=msg)
         elif choice == "2":
             _rebuild()
+            _inject_time(_log)  # 先给参照(最近一轮末时间)+ 注入假冒时刻
             note = input("自走情境(回车=纯心跳无情境; 输入=情境自走): ").strip()
             _run_turn("self", self_note=note or None)
+        elif choice == "v":
+            _rebuild()
+            _inject_time(_log)
         elif choice == "b":
             _rebuild()
             _run_backfill()
@@ -327,7 +463,11 @@ def main() -> None:
             _rebuild()
             src = input("预览哪轮(user/self): ").strip().lower()
             src = "self" if src == "self" else "user"
-            print_messages(_build_messages(src, _log), src, _log)
+            eng._clock_override["ts"] = _vnow()
+            try:
+                print_messages(_build_messages(src, _log), src, _log)
+            finally:
+                eng._clock_override["ts"] = 0.0
         elif choice == "t":
             modes = ["file", "off", "〔自语〕", "〔自语·{time}〕"]
             _prefix_mode = modes[(modes.index(_prefix_mode) + 1) % len(modes)]
@@ -343,7 +483,8 @@ def main() -> None:
             print(f"上下文窗口 → {_max_rounds or '全量'}")
         elif choice == "c":
             _log = SessionLog("prompt-lab")
-            print("会话历史已清空")
+            _anchor_morning()  # 新一段也从上午 9 点开始
+            print("会话历史已清空(虚拟时钟回今天 09:00)")
         else:
             print("?")
 
