@@ -292,31 +292,50 @@ def print_messages(messages: list[dict], source: str = "user", log=None) -> None
         print(f"[{m.get('role')}] {txt}")
 
 
-_tool_calls_seen: set[str] = set()  # 本轮已打印的工具调用(id/名字去重)
+def _make_console_cb(log):
+    """当轮控制台渲染回调:文本直打,工具执行按日志顺序补打。
 
+    流式只给 LLM 的 chunk;工具是引擎在**步与步之间同步执行**的,结果先写进
+    日志(tool/call + tool/result),之后下一步的文字 chunk 才到达。所以每次
+    收到文字前,先扫日志把新增的工具调用(带完整参数)与工具返回内容打出来,
+    控制台顺序才是真实的:第 N 次 LLM → ⚙ 调用(参数) → 返回内容 → 她的下一句。
+    每步(每次 LLM 调用)打一行步标记,方便数清调了几次 LLM。
 
-def _stream_cb(chunk: dict) -> None:
-    """控制台渲染:文本逐段打;工具调用只在新调用开头打一行。
-
-    流式里一个工具调用的参数是**多段增量**到达的(每段一个 tool_call chunk,
-    只有首段带 id 和 name,后续段只有 arguments_delta 片段)—— 若逐 chunk
-    打印会把一次 change_outfit 刷成二十行空 ⚙。按 (id 或 name) 去重,
-    同一调用只打一次;无 id/name 的参数续段直接跳过。
+    log:本轮日志(引擎 run_turn 边跑边往里写;同一对象引用)。
     """
-    global _tool_calls_seen
-    kind = chunk.get("kind")
-    if kind == "text":
-        print(chunk.get("text", ""), end="", flush=True)
-    elif kind == "tool_call":
-        cid = chunk.get("id") or ""
-        name = chunk.get("name") or ""
-        key = cid or (f"name:{name}" if name else "")
-        if not key:
-            return  # 参数续段(无 id/name):不是新调用,不打
-        if key in _tool_calls_seen:
-            return  # 同一调用的后续增量:已经打过这一行
-        _tool_calls_seen.add(key)
-        print(f"\n  ⚙ [tool] {name}", flush=True)
+
+    shown_upto = -1  # 已显示到的日志 seq(引擎 append 单调递增)
+
+    def _flush_log_events() -> None:
+        nonlocal shown_upto
+        for e in log.events:
+            if e.seq <= shown_upto:
+                continue
+            shown_upto = e.seq
+            t = e.type
+            if t == "step/start":
+                step = e.data.get("step")
+                print(f"\n── 第 {step} 次 LLM 调用 ──", flush=True)
+            elif t == "tool/call":
+                name = e.data.get("name", "")
+                args = e.data.get("arguments", "")
+                print(f"  ⚙ [tool] {name} {args}".rstrip(), flush=True)
+            elif t == "tool/result":
+                txt = _blocks_text(e.data.get("content")) or ""
+                if e.data.get("is_error"):
+                    print(f"  ✗ 工具报错: {txt}", flush=True)
+                else:
+                    print(f"  ↳ 工具返回: {txt}", flush=True)
+
+    def cb(chunk: dict) -> None:
+        kind = chunk.get("kind")
+        if kind == "text":
+            # 下一条文字 = 新一轮 LLM 开始(或新一步):先补打已落日志的工具内容
+            _flush_log_events()
+            print(chunk.get("text", ""), end="", flush=True)
+
+    cb.flush = _flush_log_events  # 轮末兜底:中断/无后续文字时也能带出工具内容
+    return cb
 
 
 def _run_turn(source: str, user_input: str | None = None, self_note: str | None = None,
@@ -330,8 +349,6 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
     →当前时刻 的可消费区间,不是浮空抽数);补写回放例外。
     """
     log = log if log is not None else _log
-    global _tool_calls_seen
-    _tool_calls_seen = set()  # 每轮重新去重(工具调用 id 只在本轮内唯一)
     replaying = bool(eng._backfill_clock["ts"])  # 补写回放:游标归调用方管
     ordinary_self = source == "self" and not replaying
     if not replaying:
@@ -353,12 +370,14 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
             print(f"(预览失败:{exc})")
         print_messages(msgs, source, log)
         print("────── 输出 ──────")
+        console_cb = _make_console_cb(log)
         try:
             result = eng._loop.run_turn(
                 user_input=user_input, source=source, log=log,
-                self_note=self_note, on_chunk=_stream_cb,
+                self_note=self_note, on_chunk=console_cb,
                 model=(_model or None), max_rounds=_max_rounds,
             )
+            console_cb.flush()  # 兜底:最后一步的工具内容若没被文字带到,这里补上
             print()
             usage = None
             for e in reversed(log.events):
