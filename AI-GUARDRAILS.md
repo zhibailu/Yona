@@ -61,5 +61,9 @@
 - 你有几处指令是在**看到我产出后**才补全的(如"当前时间=start"是看到强制轮输出才说透)。
   这没问题,但意味着:我按你**上一条**做时,往往还没拿到**这一条** —— 所以重要语义
   你尽早给我,能少一轮返工。
-- 文档(尤其 STRUCTURE)有**陈旧矛盾**(git init/_life/行数/测试数),正在逐份拆/清;
-  在拆完前,以 **MAP 最新拍板 + params.py ✅/⏳ + personas.py 内容层** 为当前真值。
+- 文档分层已完成(2026-09):五个旧根文档拆/迁入 `docs/`(VISION/DESIGN→decisions,
+  STRUCTURE→docs/STRUCTURE, LIFE_BACKFILL→protocols;MAP 拆成 decisions/TIMELINE +
+  tasks/{PROGRESS,OPEN,RULES})。STRUCTURE 有**陈旧矛盾**(git init/_life/行数/
+  测试数),清单见 `docs/pitfalls/HISTORY.md §四`。
+- 当前真值排序:见 `docs/README.md`(① decisions/TIMELINE 拍板正典 + params.py
+  ✅/⏳ ② personas 文案 ③ 每目录 README + 代码)。

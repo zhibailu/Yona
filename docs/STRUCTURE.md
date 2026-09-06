@@ -143,14 +143,16 @@ core/loop.py run_turn model 字段);「连接/更换模型」按钮 = 首启向�
   finish_reason;流式带 `stream_options.include_usage`;usage 锚到
   assistant/message,chunk 层留原始 —— 消费方(计量/成本/截断率)只读日志,
   不再回头改适配器
-- 生命周期:Heartbeat 闸门(纯规则)+ LifeLoop 自走轮写 `_life`
+- 生命周期:Heartbeat 闸门(纯规则)+ LifeLoop 自走轮(source=self)
 - **离线生活补写**(核心算法):rate = K×shape 连续概率判定,收编主 loop,
-  无第二 AgentLoop —— 详见 `LIFE_BACKFILL.md`
+  无第二 AgentLoop —— 详见 `docs/protocols/LIFE_BACKFILL.md`
 - 服务:24 端点(实测)/ SSE 流式(asyncio.Queue)/ busy 帧 / workspace+agent-feed 观测
-- 数据:每会话一 SessionLog 落盘 `data/sessions/`,`_life` 独立生活流
+- 数据:每卡一套 life(2026-09 拍板)—— 生活流写"最近激活的卡"自己的
+  chat.log(source=self),不再有匿名全局 `_life.log`;存储 = 会话目录制
+  `sessions/<sid>/{chat.log, meta.json, images/}`(见 docs/decisions/TIMELINE / DESIGN §12b)
 
-验证:11 个测试文件全绿(Mock + 真模型双路);探针/扫描/绘图工具齐(见
-LIFE_BACKFILL.md §6)。
+验证:12 个测试文件全绿(Mock + 真模型双路);探针/扫描/绘图工具齐(见
+docs/protocols/LIFE_BACKFILL.md §6)。
 
 ---
 
@@ -162,7 +164,10 @@ LIFE_BACKFILL.md §6)。
 - 设计资产收进 `assets/design/`(rate_curve.png 等):公开仓库里 test/ 可选择性
   发布,资产与文档应保留可看 —— 生成脚本输出直指该目录。
 - `.gitignore` 已含 `data/`(2026-09):会话/生活日志与图片不入库。
-- 项目尚未 git init:建议对外发布前 `git init` + 一次干净基线提交。
+
+> 2026-09 修订:本文为"结构身躯"(布局/取舍/UI)历史成稿,若干过时项清单见
+> `docs/pitfalls/HISTORY.md §四`(git init 早已做、per-card life 取代 `_life`、
+> 测试数/行数以代码为准)。当前真值排序与完整文档地图见 `docs/README.md`。
 
 ## 7. 演进规则(小步可闭合)
 

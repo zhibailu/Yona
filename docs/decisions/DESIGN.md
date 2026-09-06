@@ -125,6 +125,13 @@ UI 只消费内核的安全视图(`surface_states()` 等),不反向塑造存储�
 
 ## 10. 离线生活补写(用户拍板后的协议;server/rhythm.py 已按此重写,本节为权威)
 
+> **2026-09 更新(协议之上叠加,不推翻 §10 算法)**:普通轮(自走/心跳/脉冲)与
+> 补写同一条 LifeSampler;补写/自走**情境合一**(删 BACKFILL_SITUATION,复用
+> SELF_SITUATION);无事件自走轮 = 安静结束不调 LLM;budget 句子在 personas;
+> 事件 start 锚定只留 lab。权威落地/机制见 `docs/protocols/LIFE_BACKFILL.md` +
+> params.py + docs/decisions/TIMELINE.md。§10 算法本体仍对。生活流不再写匿名
+> `_life`,写"最近激活的卡"的 chat.log(见 §12b)。
+
 **目标(用户定义)**:她离线(进程死)期间也在生活。重启后把这段值得记下的日子
 补进 `_life`,像发朋友圈/日记——"一天难得有一两件值得记的事"。
 **交付形态**:UI 内心活动看到的是连续的时间线(若干事件,各有起始时间),不是

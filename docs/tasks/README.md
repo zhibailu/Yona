@@ -3,8 +3,8 @@
 > 放"要做什么 / 做到哪 / 还有哪些没拍"。进度以**完成即收口 + 测试绿**为准,
 > 不靠嘴说。
 >
-> 开放项/待拍(⏳)权威现状在 MAP「四、开放项/待拍」+ `server/params.py`(每项带
-> 状态),逐步迁到本目录。
+> 开放项/待拍(⏳):权威在 `docs/tasks/OPEN.md`(从旧 MAP 四节拆出)+
+> `server/params.py`(每项带状态)。当前状态/进度见 `docs/tasks/PROGRESS.md`。
 >
 > 规则:
 > - 每条任务标:目标 / 状态(pending|in_progress|done|blocked)/ 验收(改了什么、
