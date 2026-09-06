@@ -100,6 +100,10 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   加上引擎装配补挂 **timeline 段**(VISION 决策 8 相对时间,"距上次和主人
   说话:X"),自走输入 = 绝对时间 + 相对时间 + 时间预算 三行俱全(预算只在
   真的命中事件时出现)。
+- **工具调用渲染去重 ✅(2026-09-07)**:流式里一次工具调用 = 首段(id/name)
+  + N 段参数增量(arguments_delta,无 id/name)—— 逐段打印/记日志会把一次
+  change_outfit 刷成二十行空 ⚙。修两处消费端:prompt_lab 控制台按调用去重
+  (一段一行),引擎 llm-log 按 index 聚合(一次调用一行完整参数)。
 - **gate 方案② ✅(2026-09 方向拍板)**:与补写同一原语(概率 = 每天期望 ×
   shape × Δt);**三个数值 ⏳ 待拍(cooldown / interval / wakes_per_day)**
 - 人设笔误史:曾把 BACKFILL 写成"16 岁女孩"(与 21 岁冲突),已修回 ——

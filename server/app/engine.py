@@ -243,7 +243,11 @@ class _TracingLLM:
 
         def gen():
             texts: list[str] = []
-            calls: list[str] = []
+            # 工具调用按 index 聚合(与 Assembler 同一路由):一个调用 =
+            # 一个 id/name 首段 + 若干 arguments 增量段 —— 逐段列会把
+            # 一次 change_outfit 刷成二十行;聚合后每调用一行完整参数。
+            tools_map: dict[int, dict] = {}
+            tools_order: list[int] = []
             usage: dict | None = None
             finish: str | None = None
             try:
@@ -255,10 +259,14 @@ class _TracingLLM:
                     if kind == "text":
                         texts.append(chunk.get("text", ""))
                     elif kind == "tool_call":
-                        calls.append(
-                            f"{chunk.get('name', '')} "
-                            f"{chunk.get('arguments_delta', '')}"
-                        )
+                        idx = chunk.get("index", 0)
+                        if idx not in tools_map:
+                            tools_map[idx] = {"name": "", "args": []}
+                            tools_order.append(idx)
+                        if chunk.get("name"):
+                            tools_map[idx]["name"] = chunk["name"]
+                        if chunk.get("arguments_delta"):
+                            tools_map[idx]["args"].append(chunk["arguments_delta"])
                     elif kind == "finish":
                         finish = chunk.get("reason")
                     elif kind == "usage":
@@ -268,8 +276,13 @@ class _TracingLLM:
                 self._log("⚠", f"{chosen} 出错", f"{type(exc).__name__}: {exc}")
                 raise
             body = "".join(texts)
-            if calls:
-                body += "\n[tool_calls] " + "; ".join(calls)
+            if tools_order:
+                parts = []
+                for idx in tools_order:
+                    t = tools_map[idx]
+                    args = "".join(t["args"])
+                    parts.append(f"{t['name']} {args}".strip())
+                body += "\n[tool_calls] " + "; ".join(parts)
             suffix = ""
             if usage:
                 suffix = (f" · {usage.get('input_tokens', 0)} in / "

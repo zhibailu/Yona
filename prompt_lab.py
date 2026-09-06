@@ -292,12 +292,31 @@ def print_messages(messages: list[dict], source: str = "user", log=None) -> None
         print(f"[{m.get('role')}] {txt}")
 
 
+_tool_calls_seen: set[str] = set()  # 本轮已打印的工具调用(id/名字去重)
+
+
 def _stream_cb(chunk: dict) -> None:
+    """控制台渲染:文本逐段打;工具调用只在新调用开头打一行。
+
+    流式里一个工具调用的参数是**多段增量**到达的(每段一个 tool_call chunk,
+    只有首段带 id 和 name,后续段只有 arguments_delta 片段)—— 若逐 chunk
+    打印会把一次 change_outfit 刷成二十行空 ⚙。按 (id 或 name) 去重,
+    同一调用只打一次;无 id/name 的参数续段直接跳过。
+    """
+    global _tool_calls_seen
     kind = chunk.get("kind")
     if kind == "text":
         print(chunk.get("text", ""), end="", flush=True)
     elif kind == "tool_call":
-        print(f"\n  ⚙ [tool] {chunk.get('name', '')}", flush=True)
+        cid = chunk.get("id") or ""
+        name = chunk.get("name") or ""
+        key = cid or (f"name:{name}" if name else "")
+        if not key:
+            return  # 参数续段(无 id/name):不是新调用,不打
+        if key in _tool_calls_seen:
+            return  # 同一调用的后续增量:已经打过这一行
+        _tool_calls_seen.add(key)
+        print(f"\n  ⚙ [tool] {name}", flush=True)
 
 
 def _run_turn(source: str, user_input: str | None = None, self_note: str | None = None,
@@ -311,6 +330,8 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
     →当前时刻 的可消费区间,不是浮空抽数);补写回放例外。
     """
     log = log if log is not None else _log
+    global _tool_calls_seen
+    _tool_calls_seen = set()  # 每轮重新去重(工具调用 id 只在本轮内唯一)
     replaying = bool(eng._backfill_clock["ts"])  # 补写回放:游标归调用方管
     ordinary_self = source == "self" and not replaying
     if not replaying:
