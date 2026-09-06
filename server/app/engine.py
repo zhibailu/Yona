@@ -324,7 +324,18 @@ class LifeLoop:
         try:
             log = _store.load_log(sid)
             if is_self:
-                begin_self_wake(log)
+                if begin_self_wake(log) <= 0:
+                    # 2026-09 拍板落地:窗口 [日志尾, 当前] 无事件 → 该轮不触发
+                    # 任何事件,**安静结束** —— 不调 LLM(不产无预算碎碎念)、
+                    # 不动日志、不进冷却(心跳从同一锚继续等下一件事件)。
+                    tail = _log_tail_epoch(log)
+                    now = _clock_override["ts"] or time.time()
+                    f_tail = (time.strftime("%m-%d %H:%M", time.localtime(tail))
+                              if tail else "—")
+                    _live(f"{tag}安静结束:窗口 {f_tail}→"
+                          f"{time.strftime('%m-%d %H:%M', time.localtime(now))}"
+                          " 无事件,不调 LLM")
+                    return None
             with _lock:
                 # 该卡快照的人格覆盖(若有)在自走轮同样生效
                 snap = _store.get_session_settings(sid)
@@ -359,7 +370,7 @@ def _log_tail_epoch(log) -> float | None:
     return log.events[-1].time
 
 
-def begin_self_wake(log=None, rng=None) -> None:
+def begin_self_wake(log=None, rng=None) -> float:
     """普通自走轮(心跳/脉冲/自走,非回放)开跑前:对本轮**可消费区间**采样一次。
 
     2026-09 用户拍板(修正 612ae32"只是浮空抽一个数"的错):普通轮与补写轮是
@@ -372,7 +383,12 @@ def begin_self_wake(log=None, rng=None) -> None:
       - **兜底**:start + 预算 ≤ 当前时刻;LifeSampler 内建 end=min(...) 已截断,
         即预算超了会被截成 当前时刻−start(她不能"还没到点就做了超出的事");
       - 命中 → 本轮预算 = 该事件的 budget(截断后,LLM 只看到减后的结果);
-      - 没命中 → 本轮预算 0 = 该轮不触发任何事件,安静结束([时间预算] 段不出现)。
+      - 没命中 → 预算 0 = 该轮不触发任何事件 → **安静结束(不调 LLM)**
+        (2026-09 拍板落地:无事件轮不许再硬跑一轮无预算的碎碎念)。
+
+    **调用方契约**:返回本轮预算(分钟)—— 0 = 该轮不触发任何事件,安静结束:
+    不调模型、不写日志、不进冷却(心跳从同一锚继续等下一件);>0 = 有事件可叙,
+    跑这一轮(self composer 的 [时间预算] 段必出现,排在 [时间线] 之后)。
 
     锚推进:区间里命中过事件,事件结束时刻(start+预算)就是下一轮可消费区间的
     起点 —— 本轮自走轮跑完会把自语写进日志(时间 = 触发时刻),日志尾自动前移
@@ -384,16 +400,17 @@ def begin_self_wake(log=None, rng=None) -> None:
     _wake_budget["min"] = 0.0
     tail = _log_tail_epoch(log)
     if tail is None:
-        return  # 全无历史:没有"最后一次交互",没有可消费区间,无事可叙
+        return 0.0  # 全无历史:没有"最后一次交互",没有可消费区间,无事可叙
     now = _clock_override["ts"] or time.time()
     if now <= tail:
-        return  # 时间没往前走(同刻/回拨):区间 ≤ 0,该轮不触发任何事件
+        return 0.0  # 时间没往前走(同刻/回拨):区间 ≤ 0,该轮不触发任何事件
     events = LifeSampler(tail, now, rng=rng).sample()
     if not events:
-        return  # 该轮不触发任何事件 → 结束(无事可叙,[时间预算] 不出现)
+        return 0.0  # 该轮不触发任何事件 → 结束(无事可叙,[时间预算] 不出现)
     # 取窗口里最后一件(距 now 最近、正在做/刚做完的那件);LifeSampler 已把
     # 每件 end 截到 ≤ now,start+预算 ≤ 当前时刻 内建成立 —— LLM 看到的 = 截完的预算。
     _wake_budget["min"] = events[-1].budget_min
+    return _wake_budget["min"]
 
 
 def end_self_wake() -> None:

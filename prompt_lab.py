@@ -19,7 +19,9 @@
   tool/result,和上一步不一样);随后流式打印输出,工具执行(参数/返回)
   按日志顺序补打。跑完还回真实 llm。
 - **自走轮手动触发**:按键即"心跳此刻醒来";回车 = 无情境(引擎纯心跳
-  占位),输入一句话 = 情境自走。
+  占位),输入一句话 = 情境自走。纯醒来(回车)那轮先按拍板语义采样判定:
+  窗口无事件 → **安静结束,不调 LLM**(打印判定与窗口,一眼看到为什么);
+  命中事件 → 才跑,[时间预算] 必接在 [时间线] 后。情境自走不 gate。
 - **虚拟时钟 = 可注入间隔/时刻(2026-09 用户三提后拍板玩法)**:每次运行/
   清空,时钟锚到今天上午 9 点;跑自走轮(2)前先打印参照 = 日志里最近
   一轮/事件的末时间,再输入你决定的假冒时间(如 23:30 / +2h / 09-08 09:00),
@@ -379,14 +381,22 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
     普通自走轮(2 自走 / 情境)也走引擎同款 **时间预算**(begin_self_wake(log),
     与心跳/脉冲一致 —— 用户拍板:普通轮与补写同一事件算法,预算锚到日志尾
     →当前时刻 的可消费区间,不是浮空抽数);补写回放例外。
+    **无事件自走轮 = 安静结束,不调 LLM**(2026-09 拍板):纯醒来(回车无情境)
+    时 begin_self_wake 返回 0 = 窗口 [日志尾 → 当前] 采样判定无事件 → 该轮
+    不触发任何事件,打印判定即返回,不调模型(否则会产无预算碎碎念)。
+    情境自走(显式 self_note)= 人工指定情境的测试轮,不 gate,照跑。
     """
     log = log if log is not None else _log
     replaying = bool(eng._backfill_clock["ts"])  # 补写回放:游标归调用方管
     ordinary_self = source == "self" and not replaying
+    quiet_skip = False
     if not replaying:
         _apply_clock(log)
     if ordinary_self:
-        eng.begin_self_wake(log)
+        # 2026-09 拍板落地:无事件的自走轮**安静结束,不调 LLM** —— 只有
+        # begin_self_wake 判定命中事件(预算 > 0)才跑,跑了必有 [时间预算]。
+        # 情境自走(显式 self_note)= 人工指定情境的测试轮,不 gate(照跑)。
+        quiet_skip = self_note is None and eng.begin_self_wake(log) <= 0
     try:
         tag = {"self": "自走轮", "user": "陪聊轮"}.get(source, source)
         if replaying:
@@ -395,6 +405,12 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
             clock_ts, clock_tag = _vnow(), ("虚拟" if _clock_offset else "真实")
         print(f"\n===== {tag} · {_model or '(默认)'} · {clock_tag}时钟 "
               f"{_fmt_ts(clock_ts)} · 前缀={_effective_prefix() or '(空)'} =====")
+        if quiet_skip:
+            tail = _tail_time(log)
+            print(f"── 采样判定 [{_fmt_ts(tail) if tail else '—'} → "
+                  f"{_fmt_ts(clock_ts)}] 无事件 → 该轮不触发任何事件,"
+                  "安静结束(拍板语义,不调 LLM)──")
+            return  # finally 仍会清预算 + 撤虚拟钟
         console_cb = _make_console_cb(log)
 
         # 包一层 llm 代理:每次真实 LLM 调用前打印组件拆分 + 实际 messages

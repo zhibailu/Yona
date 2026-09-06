@@ -210,7 +210,9 @@ def test_begin_self_wake_anchored_to_log_tail_and_clamped():
 
     - 与 LifeSampler 同 seed 采样完全一致(同一事件算法,不是浮空抽数);
     - 事件被截断:start + 预算 ≤ 当前时刻(采样器内建 end=min(..., t1));
-    - 区间里没事件 → 预算 0([时间预算] 段不出现)。
+    - 区间里没事件 → 预算 0([时间预算] 段不出现);
+    - 返回值 = 本轮预算(0 = 该轮不触发任何事件 → 调用方安静结束不调 LLM,
+      2026-09 拍板;>0 = 有事件可叙,跑这一轮)。
     """
     import random
     from server.rhythm import LifeSampler
@@ -227,12 +229,13 @@ def test_begin_self_wake_anchored_to_log_tail_and_clamped():
         for seed in range(8):  # 多个 seed:命中与不命中都验
             expected = LifeSampler(tail, now, rng=random.Random(seed)).sample()
             eng._wake_budget["min"] = -1.0
-            eng.begin_self_wake(log, rng=random.Random(seed))
+            got = eng.begin_self_wake(log, rng=random.Random(seed))
+            assert got == eng._wake_budget["min"], seed  # 返回即生效预算
             if not expected:
-                assert eng._wake_budget["min"] == 0.0, seed  # 无事件 → 安静
+                assert got == 0.0, seed  # 无事件 → 0 → 安静结束(不调 LLM)
             else:
                 last = expected[-1]  # 取距 now 最近那件
-                assert eng._wake_budget["min"] == last.budget_min, seed
+                assert got == last.budget_min, seed
                 assert last.end <= now + 1e-6  # 截断:start+预算 ≤ 当前时刻
     finally:
         eng._wake_budget["min"] = 0.0
