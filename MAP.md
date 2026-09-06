@@ -104,6 +104,12 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   + N 段参数增量(arguments_delta,无 id/name)—— 逐段打印/记日志会把一次
   change_outfit 刷成二十行空 ⚙。修两处消费端:prompt_lab 控制台按调用去重
   (一段一行),引擎 llm-log 按 index 聚合(一次调用一行完整参数)。
+- **prompt_lab 每次 LLM 调用都打输入 ✅(2026-09-07,lab 包代理,内核零改动)**:
+  之前只打开跑前第一次输入,调工具后第二步的输入(带 tool/result)从不打。
+  不用内核钩子 —— lab 在 run_turn 前把 `eng._loop.llm` 包成打印代理
+  (`_InputPrintProxy`):内核每步调 `llm.stream(messages)` 时,代理先打
+  **SYSTEM 组件拆分 + 实际 messages** 再转发真 llm,一轮调几次打几次;
+  跑完还回真 llm(不污染引擎)。lab 头部文档已同步。
 - **gate 方案② ✅(2026-09 方向拍板)**:与补写同一原语(概率 = 每天期望 ×
   shape × Δt);**三个数值 ⏳ 待拍(cooldown / interval / wakes_per_day)**
 - 人设笔误史:曾把 BACKFILL 写成"16 岁女孩"(与 21 岁冲突),已修回 ——

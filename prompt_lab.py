@@ -11,8 +11,13 @@
     3. 之后只用 `eng._loop.run_turn(...)` / `eng.system_component_sections(...)`
   实验台看到的 system、历史、前缀、llm 调用 = 引擎真实路径,llm-log 也照记。
 - **会话不落盘**:聊天日志用进程内 SessionLog(退出即弃,不写 data/)。
-- 每次真实调用前打印 **SYSTEM 组件拆分**(persona/situation/world/state/
-  tool_usages,来自引擎真实 composer)+ 完整 messages;调用后流式打印输出。
+- **每次真实 LLM 调用都打输入**(2026-09,lab 包 llm 代理,内核零改动):
+  跑 run_turn 前把 `eng._loop.llm` 换成打印代理 —— 内核每步(每次真实调用)
+  调 `llm.stream(messages)` 时,代理先打 **SYSTEM 组件拆分**(persona/
+  situation/world/state/tool_usages,来自引擎真实 composer)+ 完整 messages,
+  再转发给真实 llm。一轮里调几次 LLM 就打印几次(调工具后下一步的输入带
+  tool/result,和上一步不一样);随后流式打印输出,工具执行(参数/返回)
+  按日志顺序补打。跑完还回真实 llm。
 - **自走轮手动触发**:按键即"心跳此刻醒来";回车 = 无情境(引擎纯心跳
   占位),输入一句话 = 情境自走。
 - **虚拟时钟 = 可注入间隔/时刻(2026-09 用户三提后拍板玩法)**:每次运行/
@@ -296,10 +301,9 @@ def _make_console_cb(log):
     """当轮控制台渲染回调:文本直打,工具执行按日志顺序补打。
 
     流式只给 LLM 的 chunk;工具是引擎在**步与步之间同步执行**的,结果先写进
-    日志(tool/call + tool/result),之后下一步的文字 chunk 才到达。所以每次
-    收到文字前,先扫日志把新增的工具调用(带完整参数)与工具返回内容打出来,
+    日志(tool/call + tool/result),之后下一步的输入回调才到 —— 所以在每次
+    LLM 调用前先扫日志,把新增的工具调用(带完整参数)与返回内容打出来,
     控制台顺序才是真实的:第 N 次 LLM → ⚙ 调用(参数) → 返回内容 → 她的下一句。
-    每步(每次 LLM 调用)打一行步标记,方便数清调了几次 LLM。
 
     log:本轮日志(引擎 run_turn 边跑边往里写;同一对象引用)。
     """
@@ -313,10 +317,7 @@ def _make_console_cb(log):
                 continue
             shown_upto = e.seq
             t = e.type
-            if t == "step/start":
-                step = e.data.get("step")
-                print(f"\n── 第 {step} 次 LLM 调用 ──", flush=True)
-            elif t == "tool/call":
+            if t == "tool/call":
                 name = e.data.get("name", "")
                 args = e.data.get("arguments", "")
                 print(f"  ⚙ [tool] {name} {args}".rstrip(), flush=True)
@@ -336,6 +337,37 @@ def _make_console_cb(log):
 
     cb.flush = _flush_log_events  # 轮末兜底:中断/无后续文字时也能带出工具内容
     return cb
+
+
+class _InputPrintProxy:
+    """lab 侧 llm 代理:每次真实 LLM 调用前打印组件拆分 + messages(实际发送)。
+
+    只改 lab 显示,不碰内核:引擎 loop 每步调 `self.llm.stream(messages, ...)` ——
+    lab 在 run_turn 前把 `eng._loop.llm` 换成这个代理,代理先打印再转发给真实
+    llm。一轮里调几次 LLM 就打印几次(调工具后下一步的输入带 tool/result,
+    与上一步不一样)。
+    """
+
+    def __init__(self, inner, on_call) -> None:
+        self._inner = inner
+        self._on_call = on_call
+        self.model = getattr(inner, "model", None)
+
+    def stream(self, messages, tools=None, temperature=None, max_tokens=None,
+               model=None):
+        self._on_call(messages)
+        return self._inner.stream(
+            messages, tools=tools, temperature=temperature,
+            max_tokens=max_tokens, model=model,
+        )
+
+    def invoke(self, messages, tools=None, temperature=None, max_tokens=None,
+               model=None):
+        self._on_call(messages)
+        return self._inner.invoke(
+            messages, tools=tools, temperature=temperature,
+            max_tokens=max_tokens, model=model,
+        )
 
 
 def _run_turn(source: str, user_input: str | None = None, self_note: str | None = None,
@@ -363,14 +395,23 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
             clock_ts, clock_tag = _vnow(), ("虚拟" if _clock_offset else "真实")
         print(f"\n===== {tag} · {_model or '(默认)'} · {clock_tag}时钟 "
               f"{_fmt_ts(clock_ts)} · 前缀={_effective_prefix() or '(空)'} =====")
-        try:
-            msgs = _build_messages(source, log)
-        except Exception as exc:  # noqa: BLE001
-            msgs = []
-            print(f"(预览失败:{exc})")
-        print_messages(msgs, source, log)
-        print("────── 输出 ──────")
         console_cb = _make_console_cb(log)
+
+        # 包一层 llm 代理:每次真实 LLM 调用前打印组件拆分 + 实际 messages
+        # (一轮里调几次就打几次;调工具后下一步的输入带 tool/result)。
+        # 只改 lab 显示,内核/引擎零改动:内核 loop 调 self.llm.stream 时,
+        # 走到的是这里包的代理,打印完再转发给真实 llm。
+        call_no = {"n": 0}
+
+        def _print_call_input(messages) -> None:
+            console_cb.flush()  # 上一步的工具执行先落地,再接下一步的输入
+            call_no["n"] += 1
+            print(f"\n──── 第 {call_no['n']} 次 LLM 调用 · 输入 ────")
+            print_messages(messages, source, log)
+            print("────── 输出 ──────")
+
+        inner_llm = eng._loop.llm
+        eng._loop.llm = _InputPrintProxy(inner_llm, _print_call_input)
         try:
             result = eng._loop.run_turn(
                 user_input=user_input, source=source, log=log,
@@ -392,6 +433,8 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
             print("\n(中断)")
         except Exception as exc:  # noqa: BLE001
             print(f"\n⚠ LLM 调用失败(回菜单可继续): {exc}")
+        finally:
+            eng._loop.llm = inner_llm  # 还回引擎真实 llm(每轮重建,双保险)
     finally:
         if ordinary_self:
             eng.end_self_wake()
