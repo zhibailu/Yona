@@ -76,12 +76,11 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   前缀文案 = `character/personas.py` 的 `SELF_TALK_PREFIX`:默认 `〔{time}〕`
   (只带时间戳先看效果,通用前缀文字 ⏳ 留用户写,改 {time} 位置即可)。
   UI 聊天流仍隐藏自走轮(内心面板 + 模型上下文才见)。
-- **提示词实验台 ✅(2026-09-06)**:`test/prompt_lab.py` 真模型交互台 ——
-  复用 character+core 装配链(不启动 server/不落盘),每次轮前自动
-  `reload(character/personas)`(改文案下一轮即生效),打印 SYSTEM 组件拆分
-  (persona/situation/world/state/tool_usages)+ 完整 messages 输入后真跑;
-  自走轮按键手动触发(回车=纯心跳占位,输情境=脉冲/补写同款 note),
-  不等心跳闸门间隔;前缀/模型/窗口即时切换;`--preview` 零花费看输入。
+- **提示词实验台 ✅(2026-09-06)**:`prompt_lab.py`(项目根,战略调试工具
+  用户拍板常驻)真模型交互台 —— 驱动**真实引擎装配**(每次轮前 reload
+  character.personas + eng._build_engine 重建),打印 SYSTEM 组件拆分 +
+  完整 messages 输入后真跑;自走轮按键手动触发,补写窗口模拟(b)落历史
+  时间戳;`--preview` 零花费看输入。`test/prompt_lab.py` 为转发壳。
 - **gate 方案② ✅(2026-09 方向拍板)**:与补写同一原语(概率 = 每天期望 ×
   shape × Δt);**三个数值 ⏳ 待拍(cooldown / interval / wakes_per_day)**
 - 人设笔误史:曾把 BACKFILL 写成"16 岁女孩"(与 21 岁冲突),已修回 ——
