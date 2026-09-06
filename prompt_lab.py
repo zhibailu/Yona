@@ -20,8 +20,10 @@
   按日志顺序补打。跑完还回真实 llm。
 - **自走轮手动触发**:按键即"心跳此刻醒来";回车 = 无情境(引擎纯心跳
   占位),输入一句话 = 情境自走。纯醒来(回车)那轮先按拍板语义采样判定:
-  窗口无事件 → **安静结束,不调 LLM**(打印判定与窗口,一眼看到为什么);
-  命中事件 → 才跑,[时间预算] 必接在 [时间线] 后。情境自走不 gate。
+  窗口无事件 → **加深一级问"是否强制触发"**(2026-09 拍板)—— 选 y:窗口内
+  随机选区作事件 start + 抽预算(同款时长分布,兜底截断 ≤ 当前时刻),填进
+  `_wake_budget` 后按命中轮跑([时间预算] 必接在 [时间线] 后);回车:安静
+  结束,不调 LLM(打印判定与窗口,一眼看到为什么)。情境自走不 gate。
 - **虚拟时钟 = 可注入间隔/时刻(2026-09 用户三提后拍板玩法)**:每次运行/
   清空,时钟锚到今天上午 9 点;跑自走轮(2)前先打印参照 = 日志里最近
   一轮/事件的末时间,再输入你决定的假冒时间(如 23:30 / +2h / 09-08 09:00),
@@ -62,7 +64,8 @@ except Exception:
 
 from server.app import engine as eng          # noqa: E402  真实装配目标
 from server.app import llm_setup              # noqa: E402
-from server.rhythm import LifeSampler         # noqa: E402
+from server.rhythm import LifeSampler, draw_budget_min  # noqa: E402
+from server.params import MIN_EVENT_SEC       # noqa: E402  最短事件(强制事件兜底用)
 from core.session_log import SessionLog       # noqa: E402
 
 # personas 模块对象:reload 它,引擎装配时现取属性(engine 已改为 personas_mod.*)
@@ -383,8 +386,11 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
     →当前时刻 的可消费区间,不是浮空抽数);补写回放例外。
     **无事件自走轮 = 安静结束,不调 LLM**(2026-09 拍板):纯醒来(回车无情境)
     时 begin_self_wake 返回 0 = 窗口 [日志尾 → 当前] 采样判定无事件 → 该轮
-    不触发任何事件,打印判定即返回,不调模型(否则会产无预算碎碎念)。
-    情境自走(显式 self_note)= 人工指定情境的测试轮,不 gate,照跑。
+    不触发任何事件;lab 在这里**加深一级**(用户拍板):问是否强制触发 ——
+    选 y → 窗口内随机选区作事件 start + 抽预算(同款时长分布,兜底截断
+    start+预算 ≤ 当前),`_wake_budget` 填进去,按命中轮跑(带 [时间预算]);
+    回车 → 安静结束,不调模型。情境自走(显式 self_note)= 人工指定情境的
+    测试轮,不 gate,照跑。
     """
     log = log if log is not None else _log
     replaying = bool(eng._backfill_clock["ts"])  # 补写回放:游标归调用方管
@@ -408,9 +414,37 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
         if quiet_skip:
             tail = _tail_time(log)
             print(f"── 采样判定 [{_fmt_ts(tail) if tail else '—'} → "
-                  f"{_fmt_ts(clock_ts)}] 无事件 → 该轮不触发任何事件,"
-                  "安静结束(拍板语义,不调 LLM)──")
-            return  # finally 仍会清预算 + 撤虚拟钟
+                  f"{_fmt_ts(clock_ts)}] 无事件 → 该轮不触发任何事件 ──")
+            # 更深一级(2026-09 用户拍板):要不要**强制触发**?要 → 窗口内
+            # 随机选区作事件 start + 抽一个预算(同款时长分布),按命中轮跑。
+            try:
+                force = input("  强制触发自走事件?(y = 窗口内随机 start + 抽预算,"
+                              "然后跑这轮; 回车 = 安静结束): ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  安静结束(不调 LLM)。")
+                return
+            if force not in ("y", "yes"):
+                print("  安静结束(不调 LLM)。")
+                return
+            if tail is None:
+                print("  没有日志尾(还没跟主人说过话)→ 没有可消费区间,"
+                      "无从随机选区,安静结束。")
+                return
+            if clock_ts - MIN_EVENT_SEC <= tail:
+                print(f"  窗口不足最短事件({MIN_EVENT_SEC / 60:.0f} 分钟),"
+                      "放不下一个事件,安静结束。")
+                return
+            # 强制事件 = 区间 [日志尾, 当前] 内均匀随机一个点作 start,
+            # 预算 = 抽数(与 LifeSampler 同一时长分布),再走**兜底截断**
+            # start+预算 ≤ 当前时刻(和引擎命中轮同一把尺,不破坏语义)。
+            rng = random.Random()
+            s = rng.uniform(tail, clock_ts - MIN_EVENT_SEC)
+            budget_min = min(draw_budget_min(rng=rng),
+                             (clock_ts - s) / 60.0)
+            eng._wake_budget["min"] = budget_min
+            print(f"  → 强制事件:start={_fmt_ts(s)} · 预算约 {budget_min:.0f} 分钟"
+                  f"(窗口内随机区 {_fmt_ts(tail)} → {_fmt_ts(clock_ts)} 抽的)"
+                  " —— 下面按命中轮跑,该轮带 [时间预算]")
         console_cb = _make_console_cb(log)
 
         # 包一层 llm 代理:每次真实 LLM 调用前打印组件拆分 + 实际 messages
