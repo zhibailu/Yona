@@ -12,3 +12,6 @@ data/
 
 # 运行时 LLM 连接(含 api_key,UI 向导写入;data/ 已整目录忽略,这里显式点名防误解)
 data/llm.local.json
+
+# 本地回滚备份(bundle),不入库
+_backup_yona_old.bundle
