@@ -31,12 +31,12 @@
                 </div>
             </div>
             <div class="inner-life" id="inner-life">
-                <h3 onclick="this.parentElement.classList.toggle('collapsed')"><span id="feed-title">生活事件</span> <span>▼</span></h3>
+                <h3 onclick="this.parentElement.classList.toggle('collapsed')"><span id="feed-title">生活事件</span> <span class="chev">▼</span></h3>
                 <div class="feed-mood" id="feed-mood"></div>
                 <div class="feed-list" id="feed-list"></div>
             </div>
             <div class="inner-life" id="object-drawer">
-                <h3 onclick="this.parentElement.classList.toggle('collapsed')">Yona 的工作区 <span>▼</span></h3>
+                <h3 onclick="this.parentElement.classList.toggle('collapsed')">Yona 的工作区 <span class="chev">▼</span></h3>
                 <div class="workspace-summary" id="workspace-summary"></div>
                 <div class="workspace-actions">
                     <button onclick="pulseAutonomy()" title="让她自己动一轮">
@@ -85,7 +85,7 @@
             </section>
             <div id="messages"></div>
             <div class="inner-life collapsed" id="llm-log-panel" style="max-height:80px;border-top:1px solid var(--line)">
-                <h3 onclick="this.parentElement.classList.toggle('collapsed')">LLM 调试 <span>▼</span> <button class="btn-secondary" style="margin-left:8px;font-size:10px;padding:2px 8px;width:auto" onclick="event.stopPropagation();openDebugFullscreen()">全屏</button></h3>
+                <h3 onclick="this.parentElement.classList.toggle('collapsed')">LLM 调试 <span class="chev">▼</span> <button class="btn-secondary" style="margin-left:8px;font-size:10px;padding:2px 8px;width:auto" onclick="event.stopPropagation();openDebugFullscreen()">全屏</button></h3>
                 <div class="feed-list" id="llm-log-list" style="font-family:monospace;font-size:10px"></div>
             </div>
             <!-- 全屏调试面板 -->

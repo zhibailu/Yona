@@ -174,9 +174,11 @@
         /* 内心活动面板 */
         .inner-life { padding: 10px 14px; border-top: 1px solid var(--line); max-height: 240px; overflow-y: auto; }
         .inner-life h3 { font-size: 12px; color: var(--text-faint); margin-bottom: 8px; cursor: pointer; user-select: none; }
-        .inner-life h3 span { float: right; font-size: 11px; transition: transform 0.2s; }
+        .inner-life h3 .chev { float: right; font-size: 11px; transition: transform 0.2s; }
         .inner-life.collapsed .feed-list { display: none; }
-        .inner-life.collapsed h3 span { transform: rotate(-90deg); }
+        /* 折叠 = 往下收列表;标题与箭头都不旋转(2026-09 用户指出旋转把标题
+           竖着卡右边露半截,只要正常收起)。箭头方向收起来时保持 ▼。 */
+        .inner-life.collapsed h3 .chev { transform: rotate(-180deg); }
         .feed-item { font-size: 11px; color: var(--text-soft); padding: 3px 0; border-bottom: 1px solid var(--line-subtle); line-height: 1.5; }
         .feed-item .time { color: var(--text-faint); font-size: 10px; margin-right: 4px; }
         .feed-mood { font-size: 12px; color: var(--accent); padding: 4px 0 8px; }
