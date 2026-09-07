@@ -269,7 +269,8 @@
         }
 
         function _setFeedHeading(title) {
-            // 2026-09 每卡 life:内心活动面板跟随当前卡(标题显示卡名)
+            // 左栏生活事件面板标题:固定叫"生活事件"(2026-09 用户拍板改标题,
+            // 不再拼"XX 的内心";跟随会话靠切卡时 _refreshInnerLife 刷新内容)。
             const el = document.getElementById('feed-title');
-            if (el) el.textContent = (title && title !== '内心') ? `${title} 的内心` : '内心活动';
+            if (el) el.textContent = '生活事件';
         }

@@ -42,6 +42,9 @@
                 _setFeedHeading(data.title || '内心');
                 // 新会话 = 无快照 = 回旗舰/全局默认
                 if (typeof _applySessionSettings === 'function') _applySessionSettings({});
+                // 新卡面板即时复位(不留上一卡残留;2026-09 切卡跟随修正)
+                if (typeof _refreshInnerLife === 'function') _refreshInnerLife();
+                if (typeof _refreshWorkspace === 'function') _refreshWorkspace();
                 await loadSessions();
                 setStatus('新会话已创建');
             } catch (e) {
@@ -77,6 +80,11 @@
                 }
                 // 加载该会话绑定的图片配置
                 await _loadSessionImages();
+                // 左栏面板都跟当前会话(2026-09 用户指出切卡不跟着变):
+                // 切卡后即时刷新「生活事件」内心面板 + 工作区/动作轨迹,
+                // 不再等 60s/45s 定时器下个 tick 才跳对会话。
+                if (typeof _refreshInnerLife === 'function') _refreshInnerLife();
+                if (typeof _refreshWorkspace === 'function') _refreshWorkspace();
             } catch (e) {
                 console.error('switchSession 失败 id=' + id, e);
                 showSystem('加载历史失败: ' + (e.message || String(e)));
