@@ -95,6 +95,32 @@ DEFAULT_CONTEXT_ROUNDS = 20
 
 
 # ============================================================
+# 五、子代理(委派 / 工人)—— 2026-09-16 新层,值**全待拍**
+# ============================================================
+
+# ⏳ 待拍:子运行的**单次输出上限**。现在是**实验值,不是产品值** ——
+#    上面那个 4096 是拍给聊天轮的,而推理模型的 reasoning_tokens 计入 output:
+#    实测同一个任务在 4096 下 reasoning 吃满 100%、正文 0 token、结算成 failed,
+#    8192 才跑得完。子运行是另一种成本结构的工作,**直接沿用聊天预算就是
+#    "把沿用值当已定"**(OPEN.md 明令禁止)。测出来的数在
+#    docs/protocols/SUBAGENT.md §4.3。
+SUBAGENT_OUTPUT_MAX_TOKENS = 8192
+
+# ⏳ 待拍:子运行的步数上限(工人不是无底洞)。
+#    **2026-09-16 实测**:4 步不够一次真实网页调研 —— 工人的节奏是
+#    "搜一次 → 打开两三个结果 → 再搜",四个 tool-call 全用在取材料上,
+#    还没轮到写结论就撞上限,结算成 failed + **空 output**(实测连撞两次,
+#    白烧 110s+81s 和约 10k token)。8 步是照这个节奏给的实验值,**仍待你拍**。
+SUBAGENT_MAX_STEPS = 8
+
+# ⏳ 待拍:工人能不能翻**本地文件**。空串 = **不接文件工具**(工人只有上网的手)。
+#    这不是能拍脑袋给的默认值:根目录决定"她能读到用户的什么",是**隐私边界**,
+#    不是技术参数。没拍之前只接 web_search / http_get,
+#    list_files / read_text_file 留在 server/app/worker_tools.py 里不接线。
+SUBAGENT_FILE_ROOT = ""
+
+
+# ============================================================
 # 参数全景打印(py server/params.py —— 像 dsh --dump-config)
 # ============================================================
 
@@ -116,6 +142,10 @@ _ROWS: list[tuple[str, str, str]] = [
     ("LLM_OUTPUT_MAX_TOKENS", str(LLM_OUTPUT_MAX_TOKENS), "✅ 2026-09 输出上限(固定,不暴露 UI)"),
     ("HOT_*(YONA_GATE_HOT=1)", f"冷却{HOT_COOLDOWN_SEC:.0f}s / 间隔{HOT_INTERVAL_SEC:.0f}s / "
      f"期望{HOT_WAKES_PER_DAY:.0f}次每天", "🔧 演示模式"),
+    ("SUBAGENT_OUTPUT_MAX_TOKENS", str(SUBAGENT_OUTPUT_MAX_TOKENS), "⏳ 子运行输出上限(实验值)"),
+    ("SUBAGENT_MAX_STEPS", str(SUBAGENT_MAX_STEPS), "⏳ 子运行步数上限(实验值)"),
+    ("SUBAGENT_FILE_ROOT", SUBAGENT_FILE_ROOT or "(未接)",
+     "⏳ 工人能否读本地文件(隐私边界)"),
 ]
 
 

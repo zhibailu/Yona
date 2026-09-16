@@ -1,30 +1,42 @@
-"""【实验台 · 不是内核】Yona 子运行(SubRun)—— 会死的隔离工作单元
+"""Yona 内核 · 子运行(SubRun)—— 会死的隔离工作单元
 
-⚠️ 为什么在 lab/ 而不是 core/(2026-09 用户质疑后归位):
-   这个原语的**失败契约还没定**,实验也没跑出结论,所以它不配进 core。
-   真机实测已经证明它现在是有问题的:撞输出上限时结算成 failed + **空结论**,
-   而这对产品是"静默空回"级风险。等下面这些问题拍定了再谈毕业进 core:
-     - 单次调用上限 vs 累计预算(谁定、定多少)—— 现在它借的是聊天轮的全局值;
-     - "干完了但没结论"要不要独立终态;
-     - 委派失败时父该怎么被通知。
-   core/ 在这轮实验中**一个文件都没加、没改**(git diff 可查)。
+**2026-09-16 用户批准从实验台毕业进 core**(原住 test/lab/subrun.py)。
+毕业的依据不是"跑通了",是**接口形状成立**:本模块只 import core 自己的
+四个原语(llm / loop / session_log / tools),不碰 HTTP、不碰 store、
+不碰 personas、不碰时钟 —— 正好是 core 的依赖边界与"纯逻辑、单一职责、可测"。
 
-想验证的东西:
-  子运行不是"第二个她",是"一个执行期特别长的工具"。
+子运行不是"第二个她",是"一个执行期特别长的工具":
   - 不带人格:SYSTEM 是任务级的(由内容层给),不装配 persona;
   - 会死:跑完即止,不进心跳/闸门/life,不产生自走轮;
   - 不进主日志:主日志只留 tool/call + tool/result(带 run_id 血缘),
     子运行的完整轨迹落独立 run store —— 真相没被稀释,只是主日志
     只留"她的那一层"(与"折叠=视图不是日志"同一哲学)。
 
+**复用装配,不复用实例**(不是选择,是硬约束):
+  父的工具体里调父自己的 run_turn 会**永久卡死** —— `core/loop.py:82` 的
+  `_turn_lock` 是 `threading.Lock`(不可重入),而工具执行发生在 `run_turn`
+  的 `with` 块内。所以这里每次都新建一个 AgentLoop,共享 llm 与执行器。
+  证据:`test/test_subagent_wiring.py::test_same_instance_inside_a_tool_deadlocks`。
+
 对照 dsh(dsh-subagent / dsh-tool-subagent 实物):
   dsh 的子代理是一个独立 Session(自己的日志)+ 血缘戳记
   (childSessionMeta.lineageSeedLength = 父日志前多少事件是继承的)
   + 委托深度预算(resolveChildDepth / maxDepth);结果经 Job(one-shot)
   或子自己的 report 工具(continuable,delivery = next-step | quiet)回父。
+  **一个已查实的差别**:dsh 的子默认**加入父的 preset**(工具集与父相同,
+  `applyChildComposition` 的 `composeFrom(childCtx, parent.ctx)`),收窄工具
+  要靠 preset 里配 `toolFilter`(出厂没配)。所以 dsh 的委派理由是"省上下文",
+  我们的是"能力" —— 子有父没有的工具。两者不可互换,详见 SUBAGENT.md §4.4。
   本模块先取"独立日志 + 血缘 id"两条,不做深度预算 / 持久 resume / 后台 report。
 
 不写文案:SYSTEM 由调用方(内容层)传,本模块只提供容器与执行器。
+
+⏳ 仍未收口(不假装已定):
+  - **单次调用上限 vs 累计预算**(谁定、定多少)—— 产品侧参数还没落到
+    server/params.py,现在是调用方显式给;
+  - **"干完了但没结论"要不要独立终态** —— 现在撞上限 = failed + 空 output,
+    回执里带 detail,算不上"静默空回",但也没给她一个"它没查完"的说法;
+  - **委派失败时父该怎么被通知** —— 现在只靠回执里的 status/detail。
 """
 
 from __future__ import annotations
@@ -36,10 +48,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.llm import LLM
-from core.loop import AgentLoop
-from core.session_log import SessionLog
-from core.tools import ToolRegistry
+from .llm import LLM
+from .loop import AgentLoop
+from .session_log import SessionLog
+from .tools import ToolRegistry
 
 # ---------- 终态(对齐 dsh JobOutcome.status:completed | killed | failed) ----------
 

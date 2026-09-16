@@ -3,7 +3,9 @@
 循环规则:
 - 每步:流式收 chunk -> 每条 append 成 assistant/chunk(原始真相)
   -> 喂给 Assembler(安全累积)-> finish 后拼出 assistant/message(安全投影)
-- 消息里有 tool-call -> 执行工具 -> 结果写回日志 -> 再来一圈
+- 消息里有 tool-call -> **并发**执行本步全部工具 -> 结果写回日志 -> 再来一圈
+  (2026-09-16 用户拍板:一步内的工具是并行的,不是 for 串行;barrier 在
+   "结果都到齐"处 —— 回合时长 ≥ 最慢那个工具)
 - 没有 tool-call(或 finish=stop)-> 这就是答案 -> turn 结束
 - finish=length(max-tokens)-> 丢弃未执行的 tool-call,turn 以 max-tokens 结束
 
@@ -18,6 +20,7 @@ from __future__ import annotations
 import inspect
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -355,10 +358,29 @@ class AgentLoop:
         registry: ToolRegistry,
         log: SessionLog,
     ) -> None:
-        for block in blocks:
-            call = ToolCall(
-                id=block["id"], name=block["name"], arguments=block["arguments"]
-            )
+        """执行本步的全部工具调用 —— **并发**,barrier 收齐后按声明顺序落日志。
+
+        2026-09-16 用户拍板:一步内被叫到的工具是**并行**的,不是 for 串行。
+        只有主循环派发这一步是阻塞的;过了这个口子就是全并行,等结果都到齐
+        再进下一步(回合时长 ≥ 最慢那个工具 —— 这一条并行改不了,也不需要改)。
+
+        形状(与并行前**不同**,读日志的消费者要跟着改):
+            tool/call ×N(声明顺序,先于执行)→ 并发执行 → tool/result ×N(声明顺序)
+        为什么这么落:
+          - call **先于执行**落盘 —— 进程半路死了也留得下"它派出去了"的证据;
+          - result 按**声明顺序**而不是完成顺序落盘 —— 日志顺序 = derive_messages
+            顺序 = 喂给模型的顺序,必须可复现(完成顺序会让模型看到的结果次序
+            每次都变,也没法写单测)。
+
+        **对工具作者的新契约**:同一 step 里被叫到的工具会**同时**跑,
+        tool.func 必须线程安全(别共享可变状态、别假设"别人已经跑完了")。
+        """
+        calls = [
+            ToolCall(id=b["id"], name=b["name"], arguments=b["arguments"])
+            for b in blocks
+        ]
+        # ① 全部调用先落日志(声明顺序)
+        for call in calls:
             log.append(
                 "tool/call",
                 turn=turn,
@@ -367,13 +389,10 @@ class AgentLoop:
                 name=call.name,
                 arguments=call.arguments,
             )
-            try:
-                args = json.loads(call.arguments) if call.arguments else {}
-                if not isinstance(args, dict):
-                    args = {}
-            except json.JSONDecodeError:
-                args = {}
-            text, is_error = registry.execute(call.name, args)
+        # ② 并发执行,结果按**声明顺序**收齐(barrier 在这一行)
+        results = self._run_tools(calls, registry)
+        # ③ 按声明顺序落结果
+        for call, (text, is_error) in zip(calls, results):
             log.append(
                 "tool/result",
                 turn=turn,
@@ -382,6 +401,36 @@ class AgentLoop:
                 content=[{"type": "text", "text": text}],
                 is_error=is_error,
             )
+
+    @staticmethod
+    def _run_tools(
+        calls: list[ToolCall], registry: ToolRegistry
+    ) -> list[tuple[str, bool]]:
+        """并发跑这些调用,返回与 calls **同序**的结果。
+
+        单件不折腾线程(绝大多数 step 只有 0~1 个调用)。
+        registry.execute 自己吞异常(返回 (text, is_error=True)),所以线程里
+        不该有异常逃出来;这里仍兜一层,免得一个工具的意外把整步带走。
+        """
+        if not calls:
+            return []
+        if len(calls) == 1:
+            return [_invoke_tool(calls[0], registry)]
+        with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+            futures = [pool.submit(_invoke_tool, call, registry) for call in calls]
+        # 按**提交顺序**取:完成顺序无关,日志顺序才是权威
+        return [f.result() for f in futures]
+
+
+def _invoke_tool(call: ToolCall, registry: ToolRegistry) -> tuple[str, bool]:
+    """解析参数 + 执行一个工具。**必须是纯的**:它会在工作线程里被并行调用。"""
+    try:
+        args = json.loads(call.arguments) if call.arguments else {}
+        if not isinstance(args, dict):
+            args = {}
+    except json.JSONDecodeError:
+        args = {}
+    return registry.execute(call.name, args)
 
 
 def _builder_arity(builder) -> int:

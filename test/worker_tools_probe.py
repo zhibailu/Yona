@@ -27,7 +27,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lab.tools import make_read_only_tools
+from server.app.worker_tools import make_read_only_tools
 
 SEP = "─" * 66
 BUDGET = 8192  # 实验输出预算(见 docs/protocols/SUBAGENT.md §4.3:4096 实测不够)
@@ -114,7 +114,7 @@ def show_each(tools: list) -> None:
 
 def show_subagent() -> None:
     from core.openai_compat import OpenAICompatibleLLM
-    from lab.subrun import SubRunSpec, execute
+    from core.subrun import SubRunSpec, execute
     from server.app.llm_setup import load_runtime
 
     cfg = load_runtime(ROOT / "data")

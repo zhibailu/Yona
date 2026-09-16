@@ -73,25 +73,35 @@ def _first_arg_text(arguments: str) -> str:
 
 
 def all_action_trails() -> list[dict]:
-    """动作轨迹 = 所有卡片(含 Yona 与各角色卡)日志里的 tool/call + result。"""
+    """动作轨迹 = 所有卡片(含 Yona 与各角色卡)日志里的 tool/call + result。
+
+    配对按 **tool_call_id**,不是"往上找最近一条还没配对的 call" ——
+    2026-09-16 内核把一步内的工具改成并发执行后,日志形状从
+    call,result,call,result 变成 call,call,result,result,
+    "找最近一条"会把结果配到**错的那个 call** 上(后发的 call 先被填)。
+    id 是日志里本来就有的,按它配才是准的。
+    """
     trails: list[dict] = []
     log_ids = [s["id"] for s in engine._store.list_sessions()]
     for lid in log_ids:
         log = engine._store.load_log(lid)
+        by_call_id: dict[str, dict] = {}
         for e in log.events:
             if e.type == "tool/call":
-                trails.append({
+                item = {
                     "action": e.data.get("name", ""),
                     "title": _first_arg_text(e.data.get("arguments", "")),
                     "text": "",
                     "created_at": _fmt_time(e.time),
-                })
+                }
+                trails.append(item)
+                call_id = e.data.get("call_id") or ""
+                if call_id:
+                    by_call_id[call_id] = item
             elif e.type == "tool/result":
-                text = _text_of(e.data.get("content"))[:100]
-                for item in reversed(trails):
-                    if item["action"] and not item.get("text"):
-                        item["text"] = text
-                        break
+                item = by_call_id.get(e.data.get("tool_call_id") or "")
+                if item is not None and not item.get("text"):
+                    item["text"] = _text_of(e.data.get("content"))[:100]
     return trails
 
 

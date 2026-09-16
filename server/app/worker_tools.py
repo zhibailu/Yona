@@ -1,6 +1,11 @@
-"""【实验台 · 不是产品】只读取材料的基础工具集
+"""Yona 产品 · 工人的手 —— 只读取材料的基础工具集
 
-用途:给子代理一双手。
+**2026-09-16 用户批准从实验台毕业**(原住 test/lab/tools.py)。
+落产品层而不是内核,理由就一条:它做的是**网络与文件 IO** ——
+`core/README.md` 的边界是"纯逻辑",这里不是纯逻辑。
+也不进 `character/`:它跟"她是谁"没关系,是能力不是人设。
+
+用途:给子代理(`core/subrun.py`)一双手。
   `docs/protocols/SUBAGENT.md` §3.3 的结论是"没有工具的子代理是个更贵的包装";
   这批工具就是它的手,同时是"给子代理能力打分"的前置材料(§3.4)。
 
@@ -39,6 +44,7 @@ from __future__ import annotations
 
 import html as _html
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -53,7 +59,7 @@ from core.tools import Tool
 # 取回层(可注入 —— 测试不打网络)
 # ============================================================
 
-USER_AGENT = "Mozilla/5.0 (compatible; YonaLab/0.1)"
+USER_AGENT = "Mozilla/5.0 (compatible; Yona/0.1)"
 
 
 @dataclass
@@ -232,6 +238,35 @@ def _envelope_err(message: str, **data: Any) -> str:
     return json.dumps({"ok": False, "error": message, **data}, ensure_ascii=False)
 
 
+def _proxy_hint(url: str) -> str:
+    """连不上时,看看是不是**代理**在捣鬼 —— 把地址摆出来,别让人对着
+    "WinError 10061" 干瞪眼。
+
+    为什么加这个(2026-09-16 真机踩的):本机 User 级环境变量里留着
+    `HTTP_PROXY=http://127.0.0.1:7892`,而那个端口没人监听 —— 于是
+    **模型调用正常、网页全拒**(NO_PROXY 里正好豁免了 API 域名)。
+    报错本身没错,但没人能从一行 WinError 里看出"你的代理死了"。
+    """
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        return ""
+    lower, upper = f"{scheme}_proxy", f"{scheme.upper()}_PROXY"
+    for key in (lower, upper):
+        value = os.environ.get(key)
+        if value:
+            # 两种拼写一起报:Windows 的环境变量不区分大小写,报错时说不清
+            # 用户当初设的是哪一种,干脆都写出来(dsh 那条原始报错就在这卡住)。
+            return (f"检测到环境里有代理 {lower} / {upper} = {value} ——"
+                    f"连接被它挡在最前面。若这个代理没在运行,清掉这两个变量再试。")
+    return ""
+
+
+def _net_error(message: str, url: str, **data: Any) -> str:
+    """网络类失败的统一收口:错误 + (有代理时的)提示。"""
+    hint = _proxy_hint(url)
+    return _envelope_err(message, url=url, **data, **({"hint": hint} if hint else {}))
+
+
 # ============================================================
 # 工具集工厂
 # ============================================================
@@ -260,6 +295,8 @@ def make_read_only_tools(
     #   test_relative_root_is_resolved)。
     fetch = opener or urllib_opener(max_bytes=max_bytes)
     searcher = search_provider or DuckDuckGoLite(opener=fetch, timeout=timeout)
+    # 网络失败提示里要报的地址:优先用注入的搜索者自带的(测试替身没有 ENDPOINT)
+    searcher_endpoint = getattr(searcher, "ENDPOINT", "") or "https://"
 
     # ---------- web_search ----------
 
@@ -276,7 +313,7 @@ def make_read_only_tools(
         except urllib.error.HTTPError as exc:
             return _envelope_err(f"搜索端点返回 HTTP {exc.code}", query=query)
         except urllib.error.URLError as exc:
-            return _envelope_err(f"搜索请求失败: {exc.reason}", query=query)
+            return _net_error(f"搜索请求失败: {exc.reason}", searcher_endpoint, query=query)
         except Exception as exc:  # noqa: BLE001
             return _envelope_err(f"搜索失败: {exc}", query=query)
         return _envelope_ok(query=query, count=len(hits), results=hits)
@@ -299,7 +336,7 @@ def make_read_only_tools(
         except urllib.error.HTTPError as exc:
             return _envelope_err(f"HTTP {exc.code}", url=url, status=exc.code)
         except urllib.error.URLError as exc:
-            return _envelope_err(f"请求失败: {exc.reason}", url=url)
+            return _net_error(f"请求失败: {exc.reason}", url)
         except Exception as exc:  # noqa: BLE001
             return _envelope_err(f"抓取失败: {exc}", url=url)
 

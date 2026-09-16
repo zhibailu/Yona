@@ -12,8 +12,18 @@ from character.persona import (
     make_world_section,
 )
 from character.state import CharacterState
-from character.tools import make_change_outfit_tool
+from character.tools import make_change_outfit_tool, make_launch_subagent_tool
 from core.tools import ToolRegistry
+
+# 实验台已验证过的委派用法文案(flash 档 64/64 派)。**逐字钉住**:
+# 能力句现在是生成的,生成结果一旦漂了,这三轮实验的结论就不再覆盖它了。
+VERIFIED_USAGE = (
+    "你自己做不了的事(上网查、翻本地文件)一律派给它 —— 你手上没这些工具,"
+    "别凭印象编,派它去查。"
+    "又长又乱的活也可以派,好处是中间过程不会留在对话里。"
+    "它看不到你和用户的对话,派活时把要做的事写完整;"
+    "拿回结论后,用自己的话说给用户听。"
+)
 
 
 def test_registered_field_can_change():
@@ -94,6 +104,38 @@ def test_time_is_not_a_tool():
     assert not hasattr(__import__("character.tools", fromlist=["x"]), "make_get_time_tool")
 
 
+def test_launch_subagent_usage_reproduces_the_verified_text():
+    """能力句由 capabilities 生成 —— 生成结果必须与实验验证过的那段**逐字相同**。
+
+    这条测试是"实验结论还有效吗"的开关:文案漂了,它当场红,
+    提醒你重跑 test/subagent_prompt_lab.py,而不是让旧结论静默失效。
+    """
+    tool = make_launch_subagent_tool(lambda t, l: {}, capabilities=("上网查", "翻本地文件"))
+    assert tool.usage == VERIFIED_USAGE
+
+
+def test_launch_subagent_usage_omits_capabilities_when_unknown():
+    """不知道工人有什么工具时,宁可不举例,也不要写死一份可能过期的能力清单。"""
+    tool = make_launch_subagent_tool(lambda t, l: {})
+    assert "你自己做不了的事一律派给它" in tool.usage
+    assert "上网查" not in tool.usage
+
+
+def test_launch_subagent_receipt_drops_none_but_keeps_zero():
+    """回执:None 不写进去(噪音),0 保留(跑了 0 步和"没说"是两件事)。"""
+    import json
+    tool = make_launch_subagent_tool(
+        lambda t, l: {"run_id": "sub-1", "status": "completed", "output": "结论",
+                      "steps": 0, "usage": None})
+    assert json.loads(tool.func({"task": "干活"})) == {
+        "run_id": "sub-1", "status": "completed", "output": "结论", "steps": 0}
+
+
+def test_launch_subagent_retains_result_across_turns():
+    """派活是一次性的,重查不了 —— 结果必须跨轮保真(core/tools.py:17-19)。"""
+    assert make_launch_subagent_tool(lambda t, l: {}).retain_result is True
+
+
 if __name__ == "__main__":
     test_registered_field_can_change()
     test_unregistered_field_rejected()
@@ -104,4 +146,8 @@ if __name__ == "__main__":
     test_world_section_accepts_injected_clock()
     test_world_section_present_in_default_composer_only_once()
     test_time_is_not_a_tool()
+    test_launch_subagent_usage_reproduces_the_verified_text()
+    test_launch_subagent_usage_omits_capabilities_when_unknown()
+    test_launch_subagent_receipt_drops_none_but_keeps_zero()
+    test_launch_subagent_retains_result_across_turns()
     print("character all tests passed")

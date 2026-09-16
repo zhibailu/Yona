@@ -14,7 +14,8 @@
   R3 两档对比:同一个任务 flash vs pro(弱模型验收的第一个实证)
   R4 失败的样子:输出被截断 -> 老实记 failed,不假装成功
 
-被测对象是 lab/subrun.py + lab/scheduler.py(**不是内核**:实验未收口,不配进 core)。
+被测对象是 core/subrun.py + test/lab/scheduler.py(执行器 2026-09-16 已毕业进 core;
+队列仍未收口,暂住实验台)。
 设计要点:
   - 子运行**不带人格**:任务级 SYSTEM 由内容层给,lab 里没有一个字的文案;
   - 子运行**不进主日志**:主日志只留 tool/call + tool/result(带 run_id),轨迹落 run store;
@@ -37,7 +38,7 @@ from core.loop import AgentLoop
 from core.session_log import SessionLog
 from core.tools import Tool, ToolRegistry
 from lab.scheduler import RunQueue
-from lab.subrun import SubRunSpec, SubRunStore, execute
+from core.subrun import SubRunSpec, SubRunStore, execute
 from mock_llm import MockLLM
 
 ROOT = Path(__file__).parent.parent

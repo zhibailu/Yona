@@ -21,7 +21,7 @@ from core.loop import AgentLoop
 from core.session_log import SessionLog
 from core.tools import Tool, ToolRegistry
 from lab.scheduler import QUEUED, RUNNING, RunQueue
-from lab.subrun import (
+from core.subrun import (
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_KILLED,

@@ -9,13 +9,14 @@
 
 | 文件 | 职责 |
 |---|---|
-| `loop.py` | AgentLoop:单循环,流式收 chunk → Assembler → 执行工具 → 再来一圈;source=user/self;busy 锁 |
+| `loop.py` | AgentLoop:单循环,流式收 chunk → Assembler → **并发**执行本步全部工具 → 再来一圈;source=user/self;busy 锁 |
 | `session_log.py` | SessionLog:append-only 事件 / 回放 / 投影 / shadow+replace / 时间游标 |
 | `composer.py` | SystemComposer + SystemSection:按优先级拼 SYSTEM,producer 动态段 |
 | `heartbeat.py` | Heartbeat:后台节奏(醒→问 Gate→值得才自走);Gate 是可插拔接口 |
 | `assembler.py` | 流式安全累积(工具按 index 聚合) |
 | `tools.py` | ToolRegistry + 用法散文 |
 | `llm.py` / `openai_compat.py` | LLM 接口 / OpenAI 兼容客户端(归一化 usage) |
+| `subrun.py` | SubRun:子运行 —— 工人身份的 loop 复用(独立日志 + 任务级 SYSTEM + 血缘 id);**换实例不复用实例**(锁不可重入) |
 
 ## 本地拍板 / 边界(与内核相关的 ✅)
 

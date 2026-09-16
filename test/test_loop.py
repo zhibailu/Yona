@@ -1,6 +1,8 @@
 """AgentLoop 自测:干净单循环 + 工具执行 + 日志脚印。"""
 
 import sys
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -362,6 +364,106 @@ def test_parse_usage_normalizes_deepseek_and_openai():
     assert _parse_usage("garbage") is None
 
 
+# ---------- 一步内多工具:并发(2026-09-16 用户拍板) ----------
+
+
+def _two_tool_env(tools: list[Tool], calls: list[ToolCall]):
+    log = SessionLog("parallel")
+    registry = ToolRegistry(tools)
+    llm = MockLLM([
+        AssistantOutput(tool_calls=calls),
+        AssistantOutput(text="都回来了"),
+    ])
+    return log, AgentLoop(log, llm, registry, system_prompt="sys", max_steps=4)
+
+
+def _mk(name: str, func) -> Tool:
+    return Tool(name=name, description=name,
+                parameters={"type": "object"}, func=func)
+
+
+def test_same_step_tools_run_concurrently():
+    """**不是计时**,是硬证明:两个工具互相等对方。
+
+    用 Barrier(2):两个工具都得先跑到 wait() 才能一起过去。串行执行时
+    第一个必然等不到第二个,超时炸掉 -> 结果里带 BrokenBarrierError。
+    """
+    barrier = threading.Barrier(2, timeout=2.0)
+
+    def wait_peer(args: dict) -> str:
+        try:
+            barrier.wait()
+            return "同步成功:两个工具真的同时在跑"
+        except threading.BrokenBarrierError as exc:
+            return f"同步失败(说明是串行): {type(exc).__name__}"
+
+    log, loop = _two_tool_env(
+        [_mk("a", wait_peer), _mk("b", wait_peer)],
+        [ToolCall(id="c1", name="a", arguments="{}"),
+         ToolCall(id="c2", name="b", arguments="{}")],
+    )
+    loop.run_turn("一起跑")
+    texts = [e.data["content"][0]["text"] for e in log.of_type("tool/result")]
+    assert texts == ["同步成功:两个工具真的同时在跑"] * 2, texts
+
+
+def test_tool_results_are_logged_in_declaration_order():
+    """快的先返回、慢的后返回 —— 落进日志的顺序仍必须是**声明顺序**。
+
+    日志顺序 = derive_messages 顺序 = 喂给模型的顺序。按完成顺序落盘的话,
+    模型每次看到的结果次序都不一样,也没法写单测。
+    """
+    log, loop = _two_tool_env(
+        [_mk("slow", lambda a: (time.sleep(0.25), "慢")[1]),
+         _mk("fast", lambda a: "快")],
+        [ToolCall(id="c_slow", name="slow", arguments="{}"),
+         ToolCall(id="c_fast", name="fast", arguments="{}")],
+    )
+    loop.run_turn("先慢后快")
+    ids = [e.data["tool_call_id"] for e in log.of_type("tool/result")]
+    assert ids == ["c_slow", "c_fast"], ids
+    # 形状:call 先全部落盘,再是 result(call,call,result,result)
+    shape = [e.type for e in log.events
+             if e.type in ("tool/call", "tool/result")]
+    assert shape == ["tool/call", "tool/call", "tool/result", "tool/result"], shape
+    # 投影出来的 tool 消息同样是声明顺序
+    tool_msgs = [m for m in log.derive_messages() if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in tool_msgs] == ["c_slow", "c_fast"]
+
+
+def test_one_failing_tool_does_not_take_down_the_others():
+    """并发里一个工具炸了,另一个照样跑完、照样落盘(各自记账)。"""
+    def boom(args: dict) -> str:
+        raise RuntimeError("炸了")
+
+    log, loop = _two_tool_env(
+        [_mk("boom", boom), _mk("ok", lambda a: "好好的")],
+        [ToolCall(id="c1", name="boom", arguments="{}"),
+         ToolCall(id="c2", name="ok", arguments="{}")],
+    )
+    result = loop.run_turn("一个炸一个不炸")
+    assert result.reason == {"kind": "completed"}
+    rows = {e.data["tool_call_id"]: e.data for e in log.of_type("tool/result")}
+    # registry.execute 把异常压成一行 "tool error: ..."(core/tools.py)
+    assert rows["c1"]["is_error"] is True
+    assert rows["c1"]["content"][0]["text"].startswith("tool error:")
+    assert "炸了" in rows["c1"]["content"][0]["text"]
+    assert rows["c2"]["is_error"] is False
+    assert rows["c2"]["content"][0]["text"] == "好好的"
+
+
+def test_single_tool_call_shape_is_unchanged():
+    """只有一个调用时不折腾线程,日志形状与并行前完全一样(老消费者不受影响)。"""
+    log, loop = _two_tool_env(
+        [_mk("only", lambda a: "就一个")],
+        [ToolCall(id="c1", name="only", arguments="{}")],
+    )
+    loop.run_turn("单个工具")
+    shape = [e.type for e in log.events
+             if e.type in ("tool/call", "tool/result")]
+    assert shape == ["tool/call", "tool/result"], shape
+
+
 if __name__ == "__main__":
     test_full_turn_with_tools()
     test_quick_answer_no_tools()
@@ -376,4 +478,8 @@ if __name__ == "__main__":
     test_run_turn_optional_fields_forwarded_to_llm()
     test_usage_and_finish_anchored_on_assistant_message()
     test_parse_usage_normalizes_deepseek_and_openai()
+    test_same_step_tools_run_concurrently()
+    test_tool_results_are_logged_in_declaration_order()
+    test_one_failing_tool_does_not_take_down_the_others()
+    test_single_tool_call_shape_is_unchanged()
     print("AgentLoop all tests passed")

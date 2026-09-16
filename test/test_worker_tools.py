@@ -20,8 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.llm import AssistantOutput, ToolCall
 from core.tools import ToolRegistry
-from lab.subrun import SubRunSpec, execute
-from lab.tools import (
+from core.subrun import SubRunSpec, execute
+from server.app.worker_tools import (
     FetchResult,
     _unwrap_ddg,
     html_to_text,
@@ -206,6 +206,52 @@ def test_web_search_provider_failure_becomes_envelope_not_exception() -> None:
     assert "provider 炸了" in out["error"]
 
 
+class DeadProxyOpener:
+    """连不上(模拟"环境里配了个没在跑的代理")。"""
+
+    def __call__(self, url: str, timeout: float) -> FetchResult:
+        import urllib.error
+
+        raise urllib.error.URLError(
+            "[WinError 10061] 由于目标计算机积极拒绝，无法连接。"
+        )
+
+
+def test_network_failure_points_at_the_proxy_when_one_is_set(monkeypatch=None) -> None:
+    """真机踩过:User 级环境变量里留着死代理 -> 模型通、网页全拒。
+
+    报错本身没错,但没人能从一行 WinError 里看出"你的代理没在跑" ——
+    所以信封里要带上代理地址和一句人话。(2026-09-16)
+    """
+    import os
+
+    keys = ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")
+    old = {k: os.environ.get(k) for k in keys}
+    try:
+        for key in keys:  # 先清干净,别让本机真实环境干扰断言
+            os.environ.pop(key, None)
+        os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
+        tools = make_read_only_tools(_tree("proxy"), opener=DeadProxyOpener())
+        out = _call(tools, "http_get", {"url": "https://e.com/a"})
+        assert out["ok"] is False
+        assert "10061" in out["error"]
+        assert "127.0.0.1:7892" in out["hint"]
+        assert "HTTPS_PROXY" in out["hint"]
+
+        # 没有代理变量时就不该冒出这句提示(别无中生有)
+        for key in keys:
+            os.environ.pop(key, None)
+        out2 = _call(tools, "http_get", {"url": "https://e.com/a"})
+        assert out2["ok"] is False
+        assert "hint" not in out2
+    finally:
+        for key, value in old.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 # ---------------- http_get ----------------
 
 def test_http_get_returns_plain_text_and_truncates() -> None:
@@ -360,6 +406,7 @@ if __name__ == "__main__":
     test_web_search_wraps_provider_results()
     test_web_search_clamps_count_and_rejects_empty_query()
     test_web_search_provider_failure_becomes_envelope_not_exception()
+    test_network_failure_points_at_the_proxy_when_one_is_set()
     test_http_get_returns_plain_text_and_truncates()
     test_http_get_rejects_bad_scheme_and_reports_http_errors()
     test_http_get_reads_charset_from_content_type()

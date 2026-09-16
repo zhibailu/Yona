@@ -23,17 +23,19 @@ from character.persona import build_small_night_composer
 from character import personas as personas_mod  # noqa: E402 文案(内容层);装配时现取属性,
 # 不用 from-import 绑死 —— 改文案后 reload 模块 + 重建引擎即生效(2026-09)
 from character.state import CharacterState
-from character.tools import make_change_outfit_tool
+from character.tools import make_change_outfit_tool, make_launch_subagent_tool
 from core.composer import SystemSection, make_timeline_section  # noqa: E402
 from core.heartbeat import Heartbeat
 from core.loop import AgentLoop
 from core.openai_compat import OpenAICompatibleLLM
 from core.session_log import SessionLog
+from core.subrun import SubRunSpec, execute as execute_subrun
 from core.tools import ToolRegistry
 
 from ..rhythm import LifeSampler
 from ..store import SessionStore
 from .gate import ServerGate
+from .worker_tools import make_read_only_tools
 
 # 产品语义参数唯一来源 = server/params.py(带拍板状态;查看: py server/params.py)
 from ..params import (  # noqa: E402
@@ -50,6 +52,9 @@ from ..params import (  # noqa: E402
     LLM_DEFAULT_TEMPERATURE,
     LLM_OUTPUT_MAX_TOKENS,
     SELF_WAKES_PER_DAY,
+    SUBAGENT_FILE_ROOT,
+    SUBAGENT_MAX_STEPS,
+    SUBAGENT_OUTPUT_MAX_TOKENS,
     WAKE_AFTER_GAP_SECONDS,
 )
 
@@ -70,6 +75,107 @@ DATA_DIR = Path(os.environ.get("YONA_DATA_DIR", str(ROOT / "data")))
 #  engine 只做装配:文案 → composer → sys_by_source builder。)
 _state = CharacterState({"clothes": "白衬衫", "pants": "牛仔裤"})
 _tools = ToolRegistry([make_change_outfit_tool(_state)])
+
+# ---------- 子代理(工人身份的 loop 复用)装配(2026-09-16,用户批准) ----------
+# 她看不见工人包里有什么工具、什么参数;她只看得见"这包能干什么"(一句散文,
+# 由下面 _worker_capabilities() 从**真正接进去的工具**生成,不手抄)。
+# 给工人用哪些工具 = 这里算,不是她挑 —— 与 dsh 的 toolFilter 同一位置。
+#
+# 三条约束都是实测过的,**顺序不能动**(证据 test/test_subagent_wiring.py):
+#   ① 工具在**模块加载时**注册一次,llm 靠可变句柄晚绑定。因为 _build_engine
+#      会重跑(下面三条调用点 + prompt_lab),而 ToolRegistry.register 撞重名会抛
+#      「已注册」(core/tools.py:48)—— 写在 _build_engine 里会炸在"用户换连接"这条路上。
+#   ② 注册必须发生在 _loop 构造**之前**:AgentLoop 只在构造时快照一遍
+#      retain_result(core/loop.py:75-78),晚注册的痕迹会在后续轮被折掉,血缘从视图消失。
+#   ③ 子运行的 SYSTEM 走**每轮覆盖**(execute 内部传 system_prompt=),绝不把
+#      sys_by_source 递进去 —— 它认不出"工人轮",会发小夜子的人设。
+_worker_llm: dict[str, object] = {"llm": None}
+
+# 工人手上是哪几件 —— 名字 ↔ 能力说法。**加工具必须同时加说法**,
+# 否则能力句会漏掉它(下面那道检查会当场喊,而不是静默漏)。
+_WORKER_LABELS: tuple[tuple[str, str], ...] = (
+    ("web_search", "上网查"),
+    ("http_get", "上网查"),        # 与搜索同为一件能力:上网
+    ("list_files", "翻本地文件"),
+    ("read_text_file", "读本地文件"),
+)
+# 本轮只接**上网的手**:文件工具要一个沙箱根,而根目录 = "她能读到用户的什么",
+# 是**隐私边界**不是技术参数,还没拍(SUBAGENT_FILE_ROOT 空 = 不接)。
+# ⚠ 给工厂的那个根现在是**惰性的**:构造只 resolve 路径、不做任何 IO,
+#   过滤掉之后文件工具根本不会进注册表 —— 它不代表我们采纳了那个根。
+_WORKER_WEB_TOOLS = ("web_search", "http_get")
+_worker_tools = ToolRegistry([
+    tool for tool in make_read_only_tools(SUBAGENT_FILE_ROOT or DATA_DIR)
+    if tool.name in _WORKER_WEB_TOOLS
+])
+
+
+def _worker_capabilities() -> tuple[str, ...]:
+    """工人能替她做什么(短说法)—— 从**真正接进去的工具**推,不手抄。
+
+    规矩出处:character/persona.py:62「能力唯一来源 = 本轮 schema + 工具用法段;
+    人设写死能力 → 工具子集变化时,模型仍以为有这工具」。能力句与工具集是同一类
+    事实,所以同样不许写死 —— 写死就会在工具集变化后变成陈旧信息,
+    而陈旧的能力描述会让她**凭假前提做决定**。
+    """
+    wired = set(_worker_tools.names())
+    labelled = {name for name, _ in _WORKER_LABELS if name in wired}
+    if labelled != wired:
+        raise RuntimeError(
+            f"工人的工具没有能力说法: {sorted(wired - labelled)} —— "
+            "去 engine._WORKER_LABELS 补,否则能力句会漏掉它(静默漏最危险)"
+        )
+    # 去重保序:web_search / http_get 是同一件能力(上网),只说一次
+    return tuple(dict.fromkeys(
+        label for name, label in _WORKER_LABELS if name in wired
+    ))
+
+
+def _run_worker(task: str, label: str) -> dict:
+    """工人跑一次(**阻塞**);工具壳只认这一个形状 —— 给它任务、拿回事实。
+
+    阻塞是 v1 的语义:她这一轮会等它跑完。这不是 bug —— 工具执行本来就发生在
+    `run_turn` 的锁内,"她一次只做一件事"照旧成立,只是这一件变成了"等工人"。
+    ⏳ 异步 / 排队 / 撤回见 docs/protocols/SUBAGENT.md §3
+      (test/lab/scheduler.py 是那部分的实验台,**未毕业**)。
+    """
+    llm = _worker_llm.get("llm")
+    if llm is None:
+        # 引擎没起来(未配置连接):老实说没干,别让她以为干过了
+        return {"status": "failed", "detail": "no-llm", "output": ""}
+    record = execute_subrun(
+        SubRunSpec(
+            task=task,
+            # 文案走内容层;engine 一个字都不写(server/README 「文案不在 server」)。
+            # [步数预算]段由**产品参数**填 {steps} —— 上限在 params,"怎么说"在
+            # personas,引擎只做这一句插值(与自走轮的 WAKE_BUDGET_TEMPLATE 同款)。
+            # 不填这段的后果实测过:工人不知道步数有限,把每步都花在"再搜一次"上,
+            # 撞上限时一个字没写 → failed + 空结论,白烧上百秒和几万 token。
+            system=(
+                personas_mod.SUBAGENT_SYSTEM
+                + "\n"
+                + personas_mod.SUBAGENT_BUDGET_TEMPLATE.format(steps=SUBAGENT_MAX_STEPS)
+            ),
+            label=label,
+            tools=_worker_tools,
+            max_steps=SUBAGENT_MAX_STEPS,
+            max_tokens=SUBAGENT_OUTPUT_MAX_TOKENS,
+        ),
+        llm,
+    )
+    return {
+        "run_id": record.run_id,
+        "status": record.status,
+        "detail": record.detail,
+        "steps": record.steps,
+        "duration": round(record.duration, 2),
+        "usage": record.usage,
+        "output": record.output,
+    }
+
+
+_tools.register(make_launch_subagent_tool(
+    _run_worker, capabilities=_worker_capabilities()))
 
 _store: SessionStore | None = None
 _loop: AgentLoop | None = None
@@ -475,6 +581,12 @@ def _build_engine(cfg: dict | None = None) -> None:
             max_tokens=LLM_OUTPUT_MAX_TOKENS,
         )
     )
+    # 工人用的就是这份 llm 客户端(同一个闸口 —— 工人的调用也进 llm-log 面板,
+    # 看得见它干了什么)。**晚绑定**:工具在模块加载时就注册好了,这里只换句柄,
+    # 所以换连接/重建引擎都不会撞「已注册」(见上面装配处的约束①)。
+    # 子运行要自己的输出上限:4096 是拍给聊天轮的,推理模型会把 reasoning
+    # 算进 output、4096 直接吃满(实测),由 _run_worker 每轮覆盖。
+    _worker_llm["llm"] = llm
     # 一份 PERSONA 常驻,三种轮只换"情境段"(2026-09 拍板修正:
     # 人设 ≠ 轮的属性 —— 陪聊/自走/补写是同一个她,不是三个人)。
     # 文案现取 personas_mod.*:改文案后 reload + 重建引擎即生效。

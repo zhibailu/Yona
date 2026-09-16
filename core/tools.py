@@ -1,4 +1,13 @@
-"""Yona 新内核 · 工具(Tool + 注册表)—— 工具三件套之一"""
+"""Yona 新内核 · 工具(Tool + 注册表)—— 工具三件套之一
+
+**"工具该放哪"只有三种答案,由层决定**(2026-09-16 用户问过一次,记这儿):
+  - 内核原语(Tool / ToolRegistry)      -> `core/tools.py`        (本文件)
+  - 她的动作工具 + 委派工具文案          -> `character/tools.py`   (角色/内容层)
+  - 给工人用的能力工具(网络/文件 IO)   -> `server/app/worker_tools.py` (产品层)
+不建统一的 `tools/` 目录:那只能落在某一层里,必然要跨层 import,
+而 core 的依赖边界是「不 import server/character」。等**同一层内**工具多到
+一个文件放不下,再在该层的目录下开 `tools/` 子包 —— 不预建。
+"""
 
 from __future__ import annotations
 
@@ -17,6 +26,11 @@ class Tool:
     retain_result: 工具自己声明"我的结果要不要跨轮保真"。
     True = 已结束轮次里也保留本工具的痕迹(适合 subagent 委派、不可重查的查询);
     False(默认)= 已结束轮次里折叠本工具的痕迹(干净视图,需要就现调)。
+
+    ⚠️ func 必须**线程安全**(2026-09-16):同一个 step 里被模型一起叫到的工具
+    是**并发**跑的(core/loop.py 的 _execute_tools 走线程池)。func 不许共享
+    可变状态、不许假设"别的工具已经跑完了"。工具之间的先后顺序没有保证;
+    唯一有保证的是**结果落进日志的顺序 = 模型声明调用的顺序**。
     """
 
     name: str

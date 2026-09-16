@@ -1,9 +1,10 @@
 # 子代理(SubAgent)协议 —— 工人身份的 loop 复用
 
-> 状态:✅ 2026-09-15 对齐身份 / 存在意义 / 复用范围 / 装配策略;**实现未开工**。
+> 状态:✅ 2026-09-15 对齐身份 / 存在意义 / 复用范围 / 装配策略;
+> ✅ 2026-09-16 代码已落地(执行器进 `core/subrun.py`,接线进 `server/app/engine.py`)。
 > 相关:`docs/decisions/VISION.md` 决策 1(能力≈工具)、6/7(两个触发源 / 后台生命循环)、
 > `docs/decisions/DESIGN.md`(SYSTEM 装配与 source)、`docs/tasks/OPEN.md`。
-> 代码落点:实验在 `test/lab/`(**不是内核**);收口后才谈进 `core/`。
+> 代码落点现状见 §9;提示词怎么试出来的见 §4.3 与 `test/subagent_prompt_lab.py`。
 
 ---
 
@@ -280,13 +281,26 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 
 ---
 
-## 9. 代码落点现状
+## 9. 代码落点现状(2026-09-16 用户批准毕业)
 
 | 路径 | 状态 |
 |---|---|
-| `test/lab/subrun.py` | 实验实现(未收口,**不是内核**) |
-| `test/lab/scheduler.py` | 实验队列(未收口) |
-| `test/subrun_probe.py` | 探针:`py test/subrun_probe.py [--real] [--budget N] [--acts R1,R3]` |
-| `test/test_subrun.py` | 自测 |
+| `core/subrun.py` | **执行器(已毕业进内核)** —— 只 import core 四个原语 |
+| `server/app/worker_tools.py` | **工人的手(已毕业进产品层)** —— 四个只读工具;文件工具因沙箱根未拍不接线 |
+| `character/tools.py` | 委派工具文案 + 工厂(能力句由工人工具集**生成**) |
+| `character/personas.py` | `SUBAGENT_SYSTEM`(工人的任务说明) |
+| `server/app/engine.py` | 装配 + 接线(runner / 能力表 / 晚绑定 llm) |
+| `server/params.py` | 三个 `SUBAGENT_*` 参数,全 ⏳ |
+| `test/lab/scheduler.py` | 队列(**仍未收口,未毕业**) |
+| `test/subrun_probe.py` | 探针:`py test/subrun_probe.py [--real]` |
+| `test/subagent_prompt_lab.py` | 提示词 A/B 实验台(真模型,出委派率表) |
+| `test/subagent_prompt_view.py` | 提示词视图(离线,看文案落在哪) |
+| `test/test_subrun.py` / `test/test_worker_tools.py` / `test/test_subagent_wiring.py` | 自测 |
 
-**`core/` 本阶段零改动。** 收口(§7 六条定完)之后才谈毕业进 `core/`。
+**毕业时定下来的三条装配约束**(实测,见 `test/test_subagent_wiring.py`):
+工具在模块加载时注册一次 + llm 晚绑定;注册必须早于 `_loop` 构造(retain 快照);
+子运行 SYSTEM 走每轮覆盖,绝不把 `sys_by_source` 递进去(否则穿上她的人设)。
+
+**仍未收口**(§7 六条 + 失败契约)不影响已落地的部分 —— 契约变的是结算语义,
+不是这三个位置。
+

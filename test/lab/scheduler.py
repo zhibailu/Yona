@@ -28,7 +28,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .subrun import STATUS_FAILED, STATUS_KILLED, SubRunRecord, SubRunSpec
+from core.subrun import STATUS_FAILED, STATUS_KILLED, SubRunRecord, SubRunSpec
 
 QUEUED = "queued"
 RUNNING = "running"
@@ -284,7 +284,7 @@ class RunQueue:
 
 
 def _alloc_run_id(queue: RunQueue) -> str:
-    from .subrun import new_run_id
+    from core.subrun import new_run_id
 
     while True:
         rid = new_run_id()

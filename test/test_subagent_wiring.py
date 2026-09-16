@@ -1,6 +1,6 @@
 """子代理**接线**自测 —— 子运行插进产品装配时,哪几件事必须先定、为什么。
 
-前置事实(已由 lab 验证):lab/subrun.py 是能跑的执行器,test_subrun.py 已证明
+前置事实(已在 core/subrun.py 里成立):它是能跑的执行器,test_subrun.py 已证明
 "隔离 / 不带人格 / 会死 / 血缘"四条行为。**本文件不测它。**
 本文件测的是**另一件事**:它能跑 ≠ 它接得上。接缝在产品装配处,只有四件事:
 
@@ -31,10 +31,10 @@ from core.llm import AssistantOutput, ToolCall
 from core.loop import AgentLoop
 from core.session_log import SessionLog
 from core.tools import Tool, ToolRegistry
-from lab.subrun import SubRunSpec, SubRunStore, execute
+from core.subrun import SubRunSpec, SubRunStore, execute
 from mock_llm import MockLLM
 
-# ---------- 内容层文案(测试自带;core/ 与 lab/ 里一个字都没有) ----------
+# ---------- 内容层文案(测试自带;core/ 与 character/ 里一个字都没有) ----------
 
 SUB_SYSTEM = "你是一次性执行单元:只完成任务、直接给结论,不寒暄、不反问。"
 PARENT_SYSTEM = "你是小夜子,一个和用户很熟的陪伴型助手,说话自然、简短。"
@@ -232,7 +232,7 @@ def test_persona_leaks_unless_the_subrun_overrides_system() -> None:
 
 
 def test_subrun_turn_is_indistinguishable_from_a_chat_turn() -> None:
-    """现状记录:子运行的 turn/start 记的是 source="user"(lab/subrun.py:254)。
+    """现状记录:子运行的 turn/start 记的是 source="user"(core/subrun.py:254)。
 
     意思是**主日志里"工人轮"和"真人聊天轮"长得一模一样** ——
     与 TOOL_VISIBILITY.md §3 那个"自走与补写撞在 source='self' 上"是同一类问题,
