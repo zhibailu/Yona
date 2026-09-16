@@ -39,7 +39,9 @@ yona-rewrite/
 │  └─ HISTORY.md               · 踩坑史 + STRUCTURE 过时项清单
 └─ docs/protocols/
    ├─ README.md                · 模块协议规则
-   └─ LIFE_BACKFILL.md         · 生活补写协议(原 LIFE_BACKFILL.md)
+   ├─ LIFE_BACKFILL.md         · 生活补写协议(原 LIFE_BACKFILL.md)
+   ├─ SUBAGENT.md              · 子代理协议(工人身份的 loop 复用)
+   └─ TOOL_VISIBILITY.md       · 工具可见性协议(谁在什么轮次看得见哪些工具)
 ```
 
 > 五个旧根文档(VISION/DESIGN/STRUCTURE/MAP/LIFE_BACKFILL)已迁移入上树,git 历史
