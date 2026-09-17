@@ -11,7 +11,9 @@ router(server/app/api/*)通过 `from .. import engine` 在**运行时**取
 
 from __future__ import annotations
 
+import itertools
 import os
+import queue as _queue
 import threading
 import time
 from collections import deque
@@ -203,6 +205,78 @@ _wake_budget: dict[str, float] = {"min": 0.0}
 # lab)。0 = 无事件/未激活;end_self_wake 一起清。
 _wake_anchor: dict[str, float] = {"start": 0.0}
 _lock = threading.Lock()  # 全局引擎锁(loop 内部已有 turn 锁,这里护 store 落盘)
+
+# ---------- turn 队列(2026-09-17 用户拍板:把"抢锁"换成"排队") ----------
+# 四个来源(聊天 / 心跳自走 / 补写 / 脉冲)**不再各自抢 _lock**,而是把一次 turn
+# 塞进这个队列;一条 worker 线程一个一个取,**永不并发**。
+#
+# **为什么是队列而不是锁**:锁能排,但**不能插队** —— 它是先到先得。而我们要的是
+#   **user 请求 > self 请求**:你一发消息,立刻排到所有自走/补写前面。
+#   这就是那条拍板规则:"已经解绑的会话来了 user 请求,其余的都靠后被插队"。
+#
+# **队列项粒度:一张卡的全部补写轮 = 一项**(不可分割)。否则你插到某张卡补写的
+#   中间,后面几轮的事件就排到你消息之后了 —— 又回到 seq/时间戳错位那个老坑。
+#
+# _lock 保留:worker 每一项仍在它里面跑 —— 第二道保险(万一有人绕过队列直接调),
+#   也继续兑现它"护 store 落盘"那句注释。
+_QUEUE_USER = 0    # 数值小的先出 → user 永远排在 self 前面
+_QUEUE_SELF = 1
+_turn_queue: "_queue.PriorityQueue" = _queue.PriorityQueue()
+_turn_seq = itertools.count()
+_turn_worker: threading.Thread | None = None
+_turn_worker_guard = threading.Lock()
+_turn_busy = threading.Event()   # worker 此刻正在跑一项
+
+
+def _turn_worker_loop() -> None:
+    while True:
+        _prio, _seq, job, box, done = _turn_queue.get()
+        _turn_busy.set()
+        try:
+            with _lock:
+                box["result"] = job()
+        except Exception as exc:  # noqa: BLE001  原位重抛给提交方
+            box["exc"] = exc
+        finally:
+            _turn_busy.clear()
+            done.set()
+
+
+def _ensure_turn_worker() -> None:
+    """按需起 worker(懒起:测试、重配引擎都不必显式 start)。"""
+    global _turn_worker
+    with _turn_worker_guard:
+        if _turn_worker is None or not _turn_worker.is_alive():
+            _turn_worker = threading.Thread(
+                target=_turn_worker_loop, daemon=True, name="yona-turn"
+            )
+            _turn_worker.start()
+
+
+def _submit_turn(job, *, priority: int = _QUEUE_SELF, on_wait=None):
+    """把一次 turn 塞进队列并**等它跑完**;返回 job 的返回值。
+
+    job 在 worker 线程里、**持 _lock** 执行 —— 所以 job 内部不要再碰 _lock。
+    job 抛异常则在这里原位重抛,由调用方决定怎么呈现。
+    on_wait:排队期间每 ~0.5s 回调一次(打印台"…排队中 Xs"现场用)。
+    """
+    _ensure_turn_worker()
+    done = threading.Event()
+    box: dict = {}
+    _turn_queue.put((priority, next(_turn_seq), job, box, done))
+    while not done.wait(0.5):
+        if on_wait is not None:
+            on_wait()
+    if "exc" in box:
+        raise box["exc"]
+    return box.get("result")
+
+
+def turn_is_busy() -> bool:
+    """此刻队列上有没有东西排在前面(喂 UI 的"她在忙"提示;近似值即可)。"""
+    return _turn_busy.is_set() or _turn_queue.qsize() > 0
+
+
 # LLM 连接状态(2026-09 任务③ 连接管理):运行时配置的进程内影子 ——
 # 谁连的(base_url)/默认模型/该端点可用模型列表。key 只进 _build_engine,不出 HTTP。
 _llm_cfg: dict | None = None
@@ -432,27 +506,27 @@ class LifeLoop:
         # (2026-09 拍板;细节见 begin_self_wake)。回放轮另有自己的预算 note
         # 且走 cursor,不在这里重复抽。
         is_self = source == "self"
-        try:
-            # 加载 → 决策 → 跑轮 → 落盘 = **一个事务,整段在 _lock 内**。
-            # (2026-09-17 修)store.load_log 无缓存(每次读盘返回新对象),写盘是
-            # 整体覆盖 —— 锁外加载的副本拿锁后会**覆盖掉别人等待期间写的东西**。
-            # _lock 的注释本来就写着"护 store 落盘",此前只护了一半。
+
+        def _job():
+            # 加载 → 决策 → 跑轮 → 落盘 = **一个事务**;worker 已经持 _lock,
+            # 这里不要再碰它。(2026-09-17 修)store.load_log 无缓存(每次读盘返回
+            # 新对象)、写盘整体覆盖 —— 加载与落盘之间绝不能松手。
             # 见 docs/pitfalls/HISTORY.md §四。
-            with _lock:
-                log = _store.load_log(sid)
-                if is_self:
-                    if begin_self_wake(log) <= 0:
-                        # 2026-09 拍板落地:窗口 [日志尾, 当前] 无事件 → 该轮不触发
-                        # 任何事件,**安静结束** —— 不调 LLM(不产无预算碎碎念)、
-                        # 不动日志、不进冷却(心跳从同一锚继续等下一件事件)。
-                        tail = _log_tail_epoch(log)
-                        now = _clock_override["ts"] or time.time()
-                        f_tail = (time.strftime("%m-%d %H:%M", time.localtime(tail))
-                                  if tail else "—")
-                        _live(f"{tag}安静结束:窗口 {f_tail}→"
-                              f"{time.strftime('%m-%d %H:%M', time.localtime(now))}"
-                              " 无事件,不调 LLM")
-                        return None
+            log = _store.load_log(sid)
+            if is_self:
+                if begin_self_wake(log) <= 0:
+                    # 2026-09 拍板落地:窗口 [日志尾, 当前] 无事件 → 该轮不触发
+                    # 任何事件,**安静结束** —— 不调 LLM(不产无预算碎碎念)、
+                    # 不动日志、不进冷却(心跳从同一锚继续等下一件事件)。
+                    tail = _log_tail_epoch(log)
+                    now = _clock_override["ts"] or time.time()
+                    f_tail = (time.strftime("%m-%d %H:%M", time.localtime(tail))
+                              if tail else "—")
+                    _live(f"{tag}安静结束:窗口 {f_tail}→"
+                          f"{time.strftime('%m-%d %H:%M', time.localtime(now))}"
+                          " 无事件,不调 LLM")
+                    return None
+            try:
                 # 该卡快照的人格覆盖(若有)在自走轮同样生效
                 snap = _store.get_session_settings(sid)
                 result = _loop.run_turn(
@@ -461,15 +535,22 @@ class LifeLoop:
                                    if snap.get("system_prompt") else None),
                 )
                 _store.save_log(sid, log)
-            self.gate.mark_self()  # 真跑了一轮 → 进入冷却
-            _live(f"{tag}完成,耗时 {time.time() - t0:.1f}s")
+                self.gate.mark_self()  # 真跑了一轮 → 进入冷却
+                return result
+            finally:
+                # 清预算/事件锚:必须在 worker 里、紧贴这一轮 —— 否则下一项
+                # 可能先看到上一轮残留的 _wake_budget。
+                if is_self:
+                    end_self_wake()
+
+        try:
+            result = _submit_turn(_job, priority=_QUEUE_SELF)
+            if result is not None:
+                _live(f"{tag}完成,耗时 {time.time() - t0:.1f}s")
             return result
         except Exception as exc:  # noqa: BLE001
             _live(f"{tag}失败: {exc}")
             raise
-        finally:
-            if is_self:
-                end_self_wake()
 
 
 # ---------- 打印台 / 小工具 ----------
@@ -805,88 +886,101 @@ def _maybe_backfill_life() -> None:
     同一个 loop,只是时间在跳。锚点 = 该卡日志尾部(卡与你的对话也是它活着的
     证据);补写 = 目标卡醒来补日子。**触发时机只有进程启动这一处**
     (start() → 本函数);用户消息永远不是补写触发点。
-    ⏳ "启动时补几张卡"未拍,见 LIFE_BACKFILL §9.6。
+    **补几张**(2026-09-17 拍板,方案"乙"):遍历**所有有历史的卡**,按
+    **离线间隔升序**(= updated_at 降序)一张一张来 —— 当前卡天然第一。
 
     **2026-09-17「方案 A」✅ 用户拍板(见 LIFE_BACKFILL §9):补写占队首。**
 
     补写的语义是"**你不在时**她的生活" —— 你的消息一进日志,那段生活就结束了。
-    所以 **"读日志尾 → 判断 → 采样 → 跑完 N 轮"必须一气呵成在同一把锁里**:
-    决策依据(日志尾)和基于它的动作之间一旦松开锁,依据就可能过期。
-    **能放在锁外的只有「起这条线程」。**
+    所以整张卡("读日志尾 → 判断 → 采样 → 跑完 N 轮 → 落盘")是**一个不可分割的
+    队列项**:决策依据(日志尾)和基于它的动作之间一旦松手,依据就可能过期。
+    你插队只会插在**整张卡**的前面或后面,不会插到它中间。
 
     旧版把 `sleep(BACKFILL_START_DELAY_SEC)` 放在锁外 = **主动让路给用户** ——
     既违反"补写最优先",又会让补写事件 append 在用户消息**之后**(日志的
     seq 顺序与时间戳顺序错位)。该参数随本方案删除(见 server/params.py)。
     """
 
-    def _run() -> None:
-        # 锁外的部分到此为止:进来之前只有"起线程"这一件事。
-        with _lock:
+    def _card_job(sid: str):
+        """**一张卡**的补写 = **一个队列项**(不可分割,见本函数 docstring)。"""
+        card_log = _store.load_log(sid)
+        last_active = card_log.events[-1].time if card_log.events else None
+        trigger, reason, gap = _wake_decision(last_active)
+        print(f"[backfill] 卡片 {sid}: {reason}")
+        if not trigger:
+            return
+        now = time.time()
+        sampler = LifeSampler(last_active, now)
+        events = sampler.sample()
+        if not events:
+            print("[backfill] 采样器无事件(离线太短 / 落在稀疏时段 /"
+                  "恰好没判定中),跳过")
+            return
+        empty_tools = ToolRegistry([])  # 补写是"那段日子怎么过的",不该有实时工具
+        snap = _store.get_session_settings(sid)
+        persona = snap.get("system_prompt") if snap.get("system_prompt") else None
+        for i, e in enumerate(events):
+            # 预算限制:budget(约 X 分钟)= "做一件做得完的事"的上限,
+            # 不是事件属性,不进日志,只当轮可见。
+            # 相对时间:距上一件事(名义上在 prev.start+prev.budget 结束)
+            # 的空档,让模型知道中间过了多久(不然它以为"刚才还在做上一件")。
+            # 事件只有起始时间,没有终止/消费时长(用户定的)。
+            if i == 0:
+                gap_note = ""
+            else:
+                prev = events[i - 1]
+                gap = e.start - (prev.start + prev.budget_min * 60)
+                if gap > 60:
+                    gap_note = (
+                        f"\n距离你上一件事做完已经过了约 {_human_gap(gap)}"
+                        "(中间的时间平平淡淡,没发生值得记的事)。"
+                    )
+                else:
+                    gap_note = "\n你上一件事刚做完不久。"
+            # note 只留"动态"部分(本段多长/隔了多久)——静态部分
+            # (独处轮怎么说)在 personas.SELF_SITUATION(补写复用同一份,
+            # 2026-09 用户拍板合一,曾另写 BACKFILL_SITUATION,已删)。
+            note = (
+                f"这段时间(约 {_human_gap(e.budget_min * 60)})里你只做了"
+                "**一件事**——就是现在刚做完/正在做的这一件。"
+                f"{gap_note}"
+            )
+            card_log.set_time_cursor(e.start)
+            _backfill_clock["ts"] = e.start
             try:
-                sid = life_session_id()
-                card_log = _store.load_log(sid)
-                last_active = card_log.events[-1].time if card_log.events else None
-                trigger, reason, gap = _wake_decision(last_active)
-                print(f"[backfill] 卡片 {sid}: {reason}")
-                if not trigger:
-                    return
-                now = time.time()
-                sampler = LifeSampler(last_active, now)
-                events = sampler.sample()
-                if not events:
-                    print("[backfill] 采样器无事件(离线太短 / 落在稀疏时段 /"
-                          "恰好没判定中),跳过")
-                    return
-                empty_tools = ToolRegistry([])  # 补写是"那段日子怎么过的",不该有实时工具
-                snap = _store.get_session_settings(sid)
-                persona = snap.get("system_prompt") if snap.get("system_prompt") else None
-                for i, e in enumerate(events):
-                    # 预算限制:budget(约 X 分钟)= "做一件做得完的事"的上限,
-                    # 不是事件属性,不进日志,只当轮可见。
-                    # 相对时间:距上一件事(名义上在 prev.start+prev.budget 结束)
-                    # 的空档,让模型知道中间过了多久(不然它以为"刚才还在做上一件")。
-                    # 事件只有起始时间,没有终止/消费时长(用户定的)。
-                    if i == 0:
-                        gap_note = ""
-                    else:
-                        prev = events[i - 1]
-                        gap = e.start - (prev.start + prev.budget_min * 60)
-                        if gap > 60:
-                            gap_note = (
-                                f"\n距离你上一件事做完已经过了约 {_human_gap(gap)}"
-                                "(中间的时间平平淡淡,没发生值得记的事)。"
-                            )
-                        else:
-                            gap_note = "\n你上一件事刚做完不久。"
-                    # note 只留"动态"部分(本段多长/隔了多久)——静态部分
-                    # (独处轮怎么说)在 personas.SELF_SITUATION(补写复用同一份,
-                    # 2026-09 用户拍板合一,曾另写 BACKFILL_SITUATION,已删)。
-                    note = (
-                        f"这段时间(约 {_human_gap(e.budget_min * 60)})里你只做了"
-                        "**一件事**——就是现在刚做完/正在做的这一件。"
-                        f"{gap_note}"
-                    )
-                    card_log.set_time_cursor(e.start)
-                    _backfill_clock["ts"] = e.start
-                    try:
-                        _loop.run_turn(
-                            source="self", log=card_log, tools=empty_tools,
-                            self_note=note, system_prompt=persona,
-                        )
-                    finally:
-                        card_log.clear_time_cursor()
-                        _backfill_clock["ts"] = 0.0
-                    _live(
-                        f"补写 {time.strftime('%m-%d %H:%M', time.localtime(e.start))} …"
-                    )
-                _store.save_log(sid, card_log)
-                if _life_gate is not None:
-                    _life_gate.mark_self()  # 补写过 → 心跳进入冷却,节奏衔接
-                f0 = time.strftime("%m-%d %H:%M", time.localtime(events[0].start))
-                f1 = time.strftime("%m-%d %H:%M", time.localtime(events[-1].start))
-                print(f"[backfill] 补写完成 {len(events)} 个事件({f0} → {f1})")
+                _loop.run_turn(
+                    source="self", log=card_log, tools=empty_tools,
+                    self_note=note, system_prompt=persona,
+                )
+            finally:
+                card_log.clear_time_cursor()
+                _backfill_clock["ts"] = 0.0
+            _live(
+                f"补写 {time.strftime('%m-%d %H:%M', time.localtime(e.start))} …"
+            )
+        _store.save_log(sid, card_log)
+        if _life_gate is not None:
+            _life_gate.mark_self()  # 补写过 → 心跳进入冷却,节奏衔接
+        f0 = time.strftime("%m-%d %H:%M", time.localtime(events[0].start))
+        f1 = time.strftime("%m-%d %H:%M", time.localtime(events[-1].start))
+        print(f"[backfill] 补写完成 {len(events)} 个事件({f0} → {f1})")
+
+    def _run() -> None:
+        # 2026-09-17 拍板(方案"乙"):启动时遍历**所有有历史的卡**,按
+        # **离线间隔升序**(= updated_at 降序)一张一张来 —— 所以当前卡天然
+        # 排第一,补完你就能立刻对话,其余在后台接着补;你一发消息还会插队
+        # 到剩余补写项前面(user > self,见 turn 队列)。
+        order = _store.life_backfill_order()
+        if not order:
+            print("[backfill] 没有聊过的卡,跳过")
+            return
+        print(f"[backfill] 待补 {len(order)} 张卡(离线间隔升序)")
+        for sid in order:
+            # 一张卡 = 一个队列项;lambda 默认参绑定 sid,避免闭包晚绑定
+            try:
+                _submit_turn(lambda s=sid: _card_job(s), priority=_QUEUE_SELF)
             except Exception as exc:  # noqa: BLE001
-                print(f"[backfill] 补写失败: {exc}")
+                print(f"[backfill] 卡片 {sid} 补写失败: {exc}")
 
     threading.Thread(target=_run, daemon=True, name="yona-backfill").start()
 

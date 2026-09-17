@@ -87,27 +87,27 @@ async def chat_stream(request: Request, body: ChatRequest):
 
     def _run():
         try:
-            # busy 探测:非阻塞抢全局锁。抢不到 = 引擎正忙(心跳自走等),
-            # 用户消息会排队 —— 先发 busy 帧,UI 立即提示,不是静默干等。
-            if not engine._lock.acquire(blocking=False):
-                t_wait0 = time.time()
+            # 排队(2026-09-17):不再抢锁,而是把这一轮塞进 turn 队列 ——
+            # **user 优先级**(队列里数值小的先出),你一发消息就排到所有
+            # 自走/补写前面("已经解绑的会话来了 user 请求,其余靠后被插队")。
+            # 前面还有东西就先发 busy 帧,UI 立即提示,不是静默干等。
+            t_wait0 = time.time()
+            if engine.turn_is_busy():
                 _put({"kind": "busy"})
                 engine._live("busy:引擎正忙(她在忙别的事),消息排队…")
-                # 进度条式等待:分段抢锁,每 0.5s 打一行等待时间(打印台实时现场)
-                while not engine._lock.acquire(timeout=0.5):
-                    engine._live(f"  …排队中 {time.time() - t_wait0:.1f}s")
-                engine._live(f"拿到引擎,排队共 {time.time() - t_wait0:.1f}s,开始回复")
-            t_turn0 = time.time()
-            try:
-                # 日志**必须**拿到锁之后才加载(2026-09-17 修):
+
+            def _on_wait():
+                engine._live(f"  …排队中 {time.time() - t_wait0:.1f}s")
+
+            def _job():
+                # 日志**必须**在"排到我"之后才加载(2026-09-17 修):
                 # store.load_log 无缓存 —— 每次读盘返回**新对象**;而写盘是
-                # **整体覆盖**。锁外加载 = 拿了把锁去覆盖别人等待期间写的东西:
+                # **整体覆盖**。加载早于排队 = 拿一份旧副本去覆盖别人等待期间
+                # 写的东西:
                 #   * 补写跑到一半你发消息 → 你这份是旧副本 → 存盘把补写抹掉;
                 #   * 连发两条 → 第二条读盘时第一条还没落盘 → 她看不到上一条,
                 #     存盘时还把第一条覆盖掉。
-                # 修法 = 把"加载 → 跑轮 → 落盘"整段纳入同一把锁(engine._lock
-                # 的注释本来就写着"护 store 落盘",此前只护了一半)。
-                # 详见 docs/pitfalls/HISTORY.md §四。
+                # 见 docs/pitfalls/HISTORY.md §四。
                 log = engine._session_log(sid)
                 # 产品旋钮(2026-09 真接线 + 任务6 路线 B):
                 # - 当轮显式传的 > 会话快照 > 全局默认(engine.resolve_turn_settings)
@@ -130,8 +130,11 @@ async def chat_stream(request: Request, body: ChatRequest):
                 )
                 engine._store.save_log(sid, log)
                 engine._store.touch_session(sid)
-            finally:
-                engine._lock.release()
+
+            t_turn0 = time.time()
+            engine._submit_turn(_job, priority=engine._QUEUE_USER, on_wait=_on_wait)
+            if time.time() - t_wait0 > 0.5:
+                engine._live(f"拿到引擎,排队共 {time.time() - t_wait0:.1f}s,开始回复")
             engine._live(f"回复完成,耗时 {time.time() - t_turn0:.1f}s")
         except Exception as exc:  # noqa: BLE001
             _put({"kind": "error", "error": str(exc)})

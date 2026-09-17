@@ -18,10 +18,19 @@
 
 ## 本地拍板 / 边界
 
+- **turn 队列(2026-09-17 用户拍板)**:四个来源(聊天 / 心跳自走 / 补写 / 脉冲)
+  **不各自抢锁**,统一 `_submit_turn(job, priority=...)` 进 `engine` 的队列;
+  一条 worker 线程(`yona-turn`)一个一个取,**永不并发**。
+  - **为什么是队列而不是锁**:锁能排,**不能插队**。规则要的是
+    `_QUEUE_USER < _QUEUE_SELF`(你一发消息就排到所有自走/补写前面)。
+  - **队列项粒度**:一次 turn 一项;补写是**一张卡的全部轮 = 一项**(不可分割)。
+  - `_lock` 保留:worker 每项仍在它里面跑(第二道保险),并继续护 store 落盘;
+    会话 CRUD 端点(`main.py`)也仍直接用它。
+  - job 在 worker 线程里执行,所以 job 内部**不要再碰 `_lock`**。
+  - 测试:`test/test_turn_queue.py`。
 - **普通轮(自走/心跳/脉冲)与补写 = 同一 LifeSampler 事件算法**,只差触发点;
   预算锚 `[日志尾→当前]`,兜底 `start+预算 ≤ 当前时刻`,无事件 → 安静结束
-  (不调 LLM)。触发语义、锚推进详见 `docs/protocols/`(迁移中,现以 engine 头注释 +
-  MAP 最新拍板为准)。
+  (不调 LLM)。触发语义、锚推进详见 `docs/protocols/LIFE_BACKFILL.md`。
 - **lab(实验台)试出来的现象默认只留 prompt_lab,别推进 server 产品执行路径**
   (AI-GUARDRAILS §一.2 —— 曾把 lab 现象误推进 LifeLoop/pulse,已回退)。
 - 文案不在 server:人设/情境在 character/personas.py,engine 只装配。引擎里出现

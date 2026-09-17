@@ -211,6 +211,29 @@ class SessionStore:
             for e in self._load_log(session_id).events
         )
 
+    def life_backfill_order(self) -> list[str]:
+        """离线补写的**处理顺序**:离线间隔升序 = `updated_at` 降序。
+
+        2026-09-17 拍板(取方案"乙"):补写启动时**遍历所有有历史的卡**,
+        按这个顺序一张一张来 —— 所以**当前卡天然排第一**(它最近有人聊过,
+        离线间隔最短),补完就能立刻正常对话,其余在后台接着补。
+
+        只收 `_has_user_talk` 的卡(光点开没说话不算;空卡没有"离线"可言)。
+        """
+        out: list[tuple[str, str]] = []
+        for meta_file in self.sessions_dir.glob("*/meta.json"):
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            sid = meta.get("id")
+            if not isinstance(sid, str) or not self._has_user_talk(sid):
+                continue
+            out.append((meta.get("updated_at", ""), sid))
+        # updated_at 是 ISO 串:大的 = 更近 = 离线间隔更短 → 排前面
+        out.sort(reverse=True)
+        return [sid for _ts, sid in out]
+
     def delete_session(self, session_id: str) -> str | None:
         """删卡 = 归档整袋(archive/<ts>-<sid>/),再清当前位。
 

@@ -140,6 +140,32 @@ def test_created_at_no_seconds_for_ui_slice():
         assert len(m["created_at"].split(" ")[1].split(":")) == 2, m["created_at"]
 
 
+def test_life_backfill_order_is_shortest_gap_first():
+    """补写处理顺序 = 离线间隔升序(updated_at 降序):当前卡排第一。
+
+    2026-09-17 拍板(方案"乙"):启动时遍历所有有历史的卡,当前卡天然第一 ——
+    它补完你就能立刻对话,其余在后台接着补。没聊过的卡不进这个列表。
+    """
+    store = SessionStore(Path(tempfile.mkdtemp()))
+    old = store.create_session("老卡")
+    new = store.create_session("新卡")
+    silent = store.create_session("只点开过没说话")
+
+    for sid, text in ((old, "很久以前"), (new, "刚刚")):
+        log = store.load_log(sid)
+        log.append("user/message", content=[{"type": "text", "text": text}],
+                   source="user", turn=1)
+        store.save_log(sid, log)
+    # silent:建了卡但没有任何真人 user 消息
+
+    order = store.life_backfill_order()
+    assert silent not in order, "没聊过的卡不该进补写列表"
+    assert set(order) == {old, new}, order
+    # 刚聊过的那张排第一(离线间隔最短)
+    store._write_meta(new, {**store._read_meta(new), "updated_at": "2099-01-01 00:00"})
+    assert store.life_backfill_order()[0] == new, store.life_backfill_order()
+
+
 if __name__ == "__main__":
     test_message_view_projection()
     test_delete_from_is_tail_cut_shadow()
@@ -148,4 +174,5 @@ if __name__ == "__main__":
     test_flagship_recreated_after_delete_and_archived()
     test_self_turn_not_in_chat_view()
     test_created_at_no_seconds_for_ui_slice()
+    test_life_backfill_order_is_shortest_gap_first()
     print("server/store all tests passed")
