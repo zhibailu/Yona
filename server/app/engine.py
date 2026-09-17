@@ -39,7 +39,6 @@ from .worker_tools import make_read_only_tools
 
 # 产品语义参数唯一来源 = server/params.py(带拍板状态;查看: py server/params.py)
 from ..params import (  # noqa: E402
-    BACKFILL_START_DELAY_SEC,
     DEFAULT_CONTEXT_ROUNDS,
     HEARTBEAT_COOLDOWN_SEC,
     HEARTBEAT_INTERVAL_SEC,
@@ -804,35 +803,39 @@ def _maybe_backfill_life() -> None:
     "log 设了时间游标" —— 事件时间戳落历史时刻,世界时间(backfill_composer)
     报历史时刻,人格切到补写视图。**没有第二个 AgentLoop**:同一张卡、
     同一个 loop,只是时间在跳。锚点 = 该卡日志尾部(卡与你的对话也是它活着的
-    证据);补写 = 目标卡醒来补日子,其它卡等下次被激活。
+    证据);补写 = 目标卡醒来补日子,其它卡等下次被激活(⏳ 触发点尚未落,§9.6)。
+
+    **2026-09-17「方案 A」✅ 用户拍板(见 LIFE_BACKFILL §9):补写占队首。**
+
+    补写的语义是"**你不在时**她的生活" —— 你的消息一进日志,那段生活就结束了。
+    所以 **"读日志尾 → 判断 → 采样 → 跑完 N 轮"必须一气呵成在同一把锁里**:
+    决策依据(日志尾)和基于它的动作之间一旦松开锁,依据就可能过期。
+    **能放在锁外的只有「起这条线程」。**
+
+    旧版把 `sleep(BACKFILL_START_DELAY_SEC)` 放在锁外 = **主动让路给用户** ——
+    既违反"补写最优先",又会让补写事件 append 在用户消息**之后**(日志的
+    seq 顺序与时间戳顺序错位)。该参数随本方案删除(见 server/params.py)。
     """
-    sid = ""
-    last_active: float | None = None
-    try:
-        sid = life_session_id()
-        log = _store.load_log(sid)
-        last_active = log.events[-1].time if log.events else None
-        trigger, reason, gap = _wake_decision(last_active)
-        print(f"[backfill] 卡片 {sid}: {reason}")
-        if not trigger:
-            return
-    except Exception as exc:  # noqa: BLE001
-        print(f"[backfill] 检查失败: {exc}")
-        return
 
     def _run() -> None:
-        time.sleep(BACKFILL_START_DELAY_SEC)  # 等服务完全起来;延迟见 params.py
-        try:
-            now = time.time()
-            sampler = LifeSampler(last_active, now)
-            events = sampler.sample()
-            if not events:
-                print("[backfill] 采样器无事件(离线太短 / 落在稀疏时段 /"
-                      "恰好没判定中),跳过")
-                return
-            empty_tools = ToolRegistry([])  # 补写是"那段日子怎么过的",不该有实时工具
-            with _lock:
+        # 锁外的部分到此为止:进来之前只有"起线程"这一件事。
+        with _lock:
+            try:
+                sid = life_session_id()
                 card_log = _store.load_log(sid)
+                last_active = card_log.events[-1].time if card_log.events else None
+                trigger, reason, gap = _wake_decision(last_active)
+                print(f"[backfill] 卡片 {sid}: {reason}")
+                if not trigger:
+                    return
+                now = time.time()
+                sampler = LifeSampler(last_active, now)
+                events = sampler.sample()
+                if not events:
+                    print("[backfill] 采样器无事件(离线太短 / 落在稀疏时段 /"
+                          "恰好没判定中),跳过")
+                    return
+                empty_tools = ToolRegistry([])  # 补写是"那段日子怎么过的",不该有实时工具
                 snap = _store.get_session_settings(sid)
                 persona = snap.get("system_prompt") if snap.get("system_prompt") else None
                 for i, e in enumerate(events):
@@ -875,13 +878,13 @@ def _maybe_backfill_life() -> None:
                         f"补写 {time.strftime('%m-%d %H:%M', time.localtime(e.start))} …"
                     )
                 _store.save_log(sid, card_log)
-            if _life_gate is not None:
-                _life_gate.mark_self()  # 补写过 → 心跳进入冷却,节奏衔接
-            f0 = time.strftime("%m-%d %H:%M", time.localtime(events[0].start))
-            f1 = time.strftime("%m-%d %H:%M", time.localtime(events[-1].start))
-            print(f"[backfill] 补写完成 {len(events)} 个事件({f0} → {f1})")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[backfill] 补写失败: {exc}")
+                if _life_gate is not None:
+                    _life_gate.mark_self()  # 补写过 → 心跳进入冷却,节奏衔接
+                f0 = time.strftime("%m-%d %H:%M", time.localtime(events[0].start))
+                f1 = time.strftime("%m-%d %H:%M", time.localtime(events[-1].start))
+                print(f"[backfill] 补写完成 {len(events)} 个事件({f0} → {f1})")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[backfill] 补写失败: {exc}")
 
     threading.Thread(target=_run, daemon=True, name="yona-backfill").start()
 

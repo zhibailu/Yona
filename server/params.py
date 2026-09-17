@@ -65,8 +65,10 @@ HEARTBEAT_STARTUP_DELAY = 15.0   # 启动后多久开始问门
 HEARTBEAT_MIN_INTERVAL = 45.0    # 间隔下限
 HEARTBEAT_MAX_INTERVAL = 600.0   # 间隔上限
 
-# ⏳ 待拍(沿用 P3):补写线程在服务起来后等多久再跑(防抢用户首条消息)
-BACKFILL_START_DELAY_SEC = 5.0
+# (❌ 2026-09-17 删:BACKFILL_START_DELAY_SEC —— "补写线程等 5s 再跑,防抢用户
+#  首条消息"。它与 LIFE_BACKFILL §9「补写占队首」直接冲突:补写的语义是
+#  "你不在时她的生活",你的消息一进日志那段就结束了,所以补写必须排在用户
+#  前面。那个"锁外先睡 5 秒"正是让用户插队、补写事件排到用户消息之后的元凶。)
 
 # 🔧 演示模式(YONA_GATE_HOT=1):判定更密/冷却更短/标度更大 —— 想看她动
 # 时不用等概率;非产品参数。
@@ -137,7 +139,6 @@ _ROWS: list[tuple[str, str, str]] = [
     ("HEARTBEAT_INTERVAL_SEC", f"{HEARTBEAT_INTERVAL_SEC:.0f}s", "✅ 2026-09 心跳判定间隔"),
     ("HEARTBEAT_STARTUP_DELAY / MIN / MAX", f"{HEARTBEAT_STARTUP_DELAY:.0f} / "
      f"{HEARTBEAT_MIN_INTERVAL:.0f} / {HEARTBEAT_MAX_INTERVAL:.0f}s", "⏳ 调度约束(沿用)"),
-    ("BACKFILL_START_DELAY_SEC", f"{BACKFILL_START_DELAY_SEC:.0f}s", "⏳ 补写启动延迟(沿用)"),
     ("LLM_DEFAULT_TEMPERATURE", str(LLM_DEFAULT_TEMPERATURE), "✅ 2026-09 默认温度(UI 可覆盖)"),
     ("LLM_OUTPUT_MAX_TOKENS", str(LLM_OUTPUT_MAX_TOKENS), "✅ 2026-09 输出上限(固定,不暴露 UI)"),
     ("HOT_*(YONA_GATE_HOT=1)", f"冷却{HOT_COOLDOWN_SEC:.0f}s / 间隔{HOT_INTERVAL_SEC:.0f}s / "
