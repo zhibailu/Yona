@@ -48,8 +48,9 @@
   DESIGN §12 权威,测试 test_snapshot.py。
 - **任务 7 · 每卡一套 life + Yona 常驻旗舰(2026-09 用户拍板)**:不再有匿名
   全局 `_life`(旧文件拍板丢弃)—— 会话即角色卡,每张卡自己的 chat.log 里
-  存 source=self 生活流;自走/脉冲/补写写给"最近激活的卡"(Yona 兜底,
-  `store.life_target_session_id`),目标卡快照人格在自走轮同样生效;内心面板
+  存 source=self 生活流;自走/脉冲写给"最近激活的卡"(Yona 兜底,
+  `store.life_target_session_id`),**补写在 2026-09-17 改为遍历所有有历史的卡**
+  (见 DESIGN §12b 尾注),目标卡快照人格在自走轮同样生效;内心面板
   跟随当前卡;Yona = 常驻保底(flagship 标记、列表第一、删了先归档到
   archive/ 再重建空);所有卡删除都归档;存储改**会话=目录制**
   (sessions/<sid>/{chat.log,meta.json,images/},图片跟卡走,URL 不变,

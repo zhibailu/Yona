@@ -8,7 +8,7 @@
 |---|---|---|
 | gate 三值:cooldown=90s / interval=60s / wakes=3次每天 | ✅ 2026-09 拍板 | params.py |
 | shape 曲线最终形状 | ⏳ 现用"晚间峰那版"候选 | params.py |
-| 心跳调度(startup/min/max)、补写启动延迟 | ⏳ 沿用值 | params.py |
+| 心跳调度(startup/min/max) | ⏳ 沿用值 | params.py |
 | personas / params 内容形态(是否转 yaml/json) | ⏳ 用户质疑 py 形态,待拍 | character/personas.py |
 | UI"角色设定"假入口(system_prompt 字段后端不消费) | ✅ 真接(2026-09):留空=旗舰,builder 覆盖 | chat.py + loop.run_turn |
 | 温度/轮数/token → run_turn 可选字段 | ✅ 2026-09 落:温度 0.9(可覆盖)/输出上限 4096(固定不暴露)/轮窗口默认 20 | loop/params/chat |

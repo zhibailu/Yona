@@ -139,6 +139,65 @@ def test_turn_is_busy_reflects_pending_work():
         tb.join(5.0)
 
 
+def test_user_priority_depends_on_target_card():
+    """优先级**看目标卡**:还没补完 → SELF(排在它的补写后面);已补完 → USER。"""
+    with eng._pending_backfill_lock:
+        eng._pending_backfill.add("card-X")
+    try:
+        assert eng.user_turn_priority("card-X") == eng._QUEUE_SELF, "未解绑的卡不该给插队"
+        assert eng.user_turn_priority("card-Y") == eng._QUEUE_USER, "已解绑的卡该插队"
+    finally:
+        with eng._pending_backfill_lock:
+            eng._pending_backfill.discard("card-X")
+
+
+def test_user_to_pending_card_waits_behind_its_backfill():
+    """未解绑的卡:user 排在它的补写**后面**;已解绑的卡:插到**前面**。"""
+    ran: list[str] = []
+    release = threading.Event()
+
+    def blocker():
+        release.wait(3.0)
+        ran.append("blocker")
+
+    tb = threading.Thread(
+        target=lambda: eng._submit_turn(blocker, priority=eng._QUEUE_SELF)
+    )
+    tb.start()
+    time.sleep(0.25)
+
+    with eng._pending_backfill_lock:
+        eng._pending_backfill.add("B")
+    try:
+        tbf = threading.Thread(target=lambda: eng._submit_turn(
+            lambda: ran.append("backfill-B"), priority=eng._QUEUE_SELF))
+        tbf.start()
+        time.sleep(0.2)
+        tuB = threading.Thread(target=lambda: eng._submit_turn(
+            lambda: ran.append("user->B"),
+            priority=eng.user_turn_priority("B")))
+        tuB.start()
+        time.sleep(0.2)
+        tuA = threading.Thread(target=lambda: eng._submit_turn(
+            lambda: ran.append("user->A"),
+            priority=eng.user_turn_priority("A")))
+        tuA.start()
+        time.sleep(0.2)
+    finally:
+        with eng._pending_backfill_lock:
+            eng._pending_backfill.discard("B")
+
+    release.set()
+    for t in (tbf, tuB, tuA, tb):
+        t.join(5.0)
+
+    assert ran[0] == "blocker", ran
+    assert ran[1] == "user->A", f"发给已解绑卡的用户请求没插到最前: {ran}"
+    assert ran.index("backfill-B") < ran.index("user->B"), (
+        f"发给未解绑卡的用户请求插到了那张卡补写前面: {ran}"
+    )
+
+
 def test_idle_queue_reports_not_busy():
     """空队列 + worker 闲着 → 不报忙。"""
     # 先保证前面塞的都跑完了
@@ -154,5 +213,7 @@ if __name__ == "__main__":
     test_same_priority_is_fifo_by_enqueue_order()
     test_job_exception_is_reraised_to_the_submitter()
     test_turn_is_busy_reflects_pending_work()
+    test_user_priority_depends_on_target_card()
+    test_user_to_pending_card_waits_behind_its_backfill()
     test_idle_queue_reports_not_busy()
-    print("turn queue(单 worker 串行 · user 插队) all tests passed")
+    print("turn queue(单 worker 串行 · user 按目标卡插队) all tests passed")

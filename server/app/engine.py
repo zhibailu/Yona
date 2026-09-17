@@ -277,6 +277,23 @@ def turn_is_busy() -> bool:
     return _turn_busy.is_set() or _turn_queue.qsize() > 0
 
 
+# 还没补完的卡 —— 优先级不是**两级平铺**,是**看目标的**(2026-09-17 用户拍板):
+#   > "未解绑的会话中,补写 > user;如果 user 发给了已经解绑的会话,
+#   >  那它就大于未解绑的补写。"
+# 所以 user 请求的优先级要问"目标卡补完了没":
+#   未补完 → 排在那张卡的补写**后面**(不给它插队,否则它会顶掉该卡的补写窗口,
+#            那张卡的离线空白就永远补不上了);
+#   已补完 → 插到**所有**未解绑补写的前面("已经解绑的先能正常对话")。
+_pending_backfill: set[str] = set()
+_pending_backfill_lock = threading.Lock()
+
+
+def user_turn_priority(sid: str) -> int:
+    """user 请求该用哪个优先级 —— 取决于**目标卡是否还没补完**。"""
+    with _pending_backfill_lock:
+        return _QUEUE_SELF if sid in _pending_backfill else _QUEUE_USER
+
+
 # LLM 连接状态(2026-09 任务③ 连接管理):运行时配置的进程内影子 ——
 # 谁连的(base_url)/默认模型/该端点可用模型列表。key 只进 _build_engine,不出 HTTP。
 _llm_cfg: dict | None = None
@@ -977,10 +994,18 @@ def _maybe_backfill_life() -> None:
         print(f"[backfill] 待补 {len(order)} 张卡(离线间隔升序)")
         for sid in order:
             # 一张卡 = 一个队列项;lambda 默认参绑定 sid,避免闭包晚绑定
+            # 标成"未解绑":期间发给这张卡的 user 请求会排队在它**后面**
+            with _pending_backfill_lock:
+                _pending_backfill.add(sid)
             try:
                 _submit_turn(lambda s=sid: _card_job(s), priority=_QUEUE_SELF)
             except Exception as exc:  # noqa: BLE001
                 print(f"[backfill] 卡片 {sid} 补写失败: {exc}")
+            finally:
+                # 跑完(含"没事件跳过")= 这张卡解绑,之后发给它的 user 请求
+                # 就能插到其余未解绑卡的前面了
+                with _pending_backfill_lock:
+                    _pending_backfill.discard(sid)
 
     threading.Thread(target=_run, daemon=True, name="yona-backfill").start()
 

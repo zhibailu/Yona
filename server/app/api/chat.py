@@ -132,7 +132,13 @@ async def chat_stream(request: Request, body: ChatRequest):
                 engine._store.touch_session(sid)
 
             t_turn0 = time.time()
-            engine._submit_turn(_job, priority=engine._QUEUE_USER, on_wait=_on_wait)
+            # 优先级**看目标卡**(2026-09-17 拍板):还没补完 → 排在它的补写后面;
+            # 已补完 → 插到所有未解绑补写的前面。
+            engine._submit_turn(
+                _job,
+                priority=engine.user_turn_priority(sid),
+                on_wait=_on_wait,
+            )
             if time.time() - t_wait0 > 0.5:
                 engine._live(f"拿到引擎,排队共 {time.time() - t_wait0:.1f}s,开始回复")
             engine._live(f"回复完成,耗时 {time.time() - t_turn0:.1f}s")

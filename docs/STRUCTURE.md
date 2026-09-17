@@ -103,7 +103,7 @@ yona-rewrite/
 | app-core.js | 主聊天逻辑、设置(真接线)、会话切换、连接管理(模型下拉/向导) | — |
 | app-messages.js | 消息渲染 + busy 帧提示(已加 rewrite 分支) | — |
 | app-sessions.js | 会话管理(真) | — |
-| app-presets.js | **agent-feed 内心活动面板(rewrite 核心展示)** + 预设 CRUD(2026-09 真存盘) | 预设尚未作用于运行时(等"快照整合"架构,见 MAP) |
+| app-presets.js | **agent-feed 内心活动面板(rewrite 核心展示)** + 预设 CRUD(2026-09 真存盘) | 预设已作用于运行时:应用预设 = 复制进会话快照(`{sid}.meta.json` 的 `settings`),当轮 > 快照 > 默认三层合并;权威见 DESIGN §12 + TIMELINE 任务 6(2026-09-17 更正:旧文写"尚未作用,等快照整合",该整合已落) |
 | app-objects-sensory.js | **workspace 桌面(动作轨迹/自语/脉冲)** | 感官(发图/语音/朗读)+物件舞台:后端无端点/恒空,UI 入口已撤(2026-09 任务4/5),代码尸体标注冻结区,感官接回时复用 |
 | app-media-debug.js | **LLM 输入输出调试(已接真日志:engine._TracingLLM 环形缓冲,折叠不空轮询;2026-09 起每调用带 token 用量与截断标记)** | — |
 | app-admin.js | — | 已剪:stats/rebuild-vector/export/clean-empty 四按钮 404,移 `static/_unused/` |
@@ -147,9 +147,10 @@ core/loop.py run_turn model 字段);「连接/更换模型」按钮 = 首启向�
 - **离线生活补写**(核心算法):rate = K×shape 连续概率判定,收编主 loop,
   无第二 AgentLoop —— 详见 `docs/protocols/LIFE_BACKFILL.md`
 - 服务:24 端点(实测)/ SSE 流式(asyncio.Queue)/ busy 帧 / workspace+agent-feed 观测
-- 数据:每卡一套 life(2026-09 拍板)—— 生活流写"最近激活的卡"自己的
-  chat.log(source=self),不再有匿名全局 `_life.log`;存储 = 会话目录制
-  `sessions/<sid>/{chat.log, meta.json, images/}`(见 docs/decisions/TIMELINE / DESIGN §12b)
+- 数据:每卡一套 life(2026-09 拍板)—— 生活流写卡**自己**的
+  `chat.log(source=self)`,不再有匿名全局 `_life.log`;存储 = 会话目录制
+  `sessions/<sid>/{chat.log, meta.json, images/}`。
+  2026-09-17:**补写改为遍历所有有历史的卡**(见 DESIGN §12b 尾注 / TIMELINE 09-17)。
 
 验证:12 个测试文件全绿(Mock + 真模型双路);探针/扫描/绘图工具齐(见
 docs/protocols/LIFE_BACKFILL.md §6)。
