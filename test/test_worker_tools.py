@@ -22,6 +22,7 @@ from core.llm import AssistantOutput, ToolCall
 from core.tools import ToolRegistry
 from core.subrun import SubRunSpec, execute
 from server.app.worker_tools import (
+    NET_ERROR_KINDS,
     FetchResult,
     _unwrap_ddg,
     html_to_text,
@@ -45,7 +46,7 @@ Source code: Lib/<b>urllib</b>/ <b>urllib</b> is a package that collects several
 # ---------------- 替身 ----------------
 
 class FakeOpener:
-    """按 URL 返回预置响应;记录被请求过的 URL。"""
+    """按 URL 返回预置响应;没配的返回 404;记录被请求过的 URL。"""
 
     def __init__(self, routes: dict[str, FetchResult]) -> None:
         self.routes = routes
@@ -55,9 +56,20 @@ class FakeOpener:
         self.seen.append(url)
         if url in self.routes:
             return self.routes[url]
-        import urllib.error
+        return FetchResult(status=404, url=url, body=b"not found",
+                           content_type="text/plain; charset=utf-8")
 
-        raise urllib.error.HTTPError(url, 404, "Not Found", None, None)  # type: ignore[arg-type]
+
+class RaiserOpener:
+    """一律抛指定异常(测错误池的分类)。"""
+
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+        self.seen: list[str] = []
+
+    def __call__(self, url: str, timeout: float) -> FetchResult:
+        self.seen.append(url)
+        raise self.exc
 
 
 class FakeSearch:
@@ -206,50 +218,46 @@ def test_web_search_provider_failure_becomes_envelope_not_exception() -> None:
     assert "provider 炸了" in out["error"]
 
 
-class DeadProxyOpener:
-    """连不上(模拟"环境里配了个没在跑的代理")。"""
+def test_network_errors_report_verbatim_error_plus_a_catalog_kind() -> None:
+    """规矩(2026-09-16 用户定):**报原话;翻译只在已知有限集合内做**。
 
-    def __call__(self, url: str, timeout: float) -> FetchResult:
-        import urllib.error
-
-        raise urllib.error.URLError(
-            "[WinError 10061] 由于目标计算机积极拒绝，无法连接。"
-        )
-
-
-def test_network_failure_points_at_the_proxy_when_one_is_set(monkeypatch=None) -> None:
-    """真机踩过:User 级环境变量里留着死代理 -> 模型通、网页全拒。
-
-    报错本身没错,但没人能从一行 WinError 里看出"你的代理没在跑" ——
-    所以信封里要带上代理地址和一句人话。(2026-09-16)
+    ① `error` 永远是 `str(exc)` 逐字原文 —— 不许换成模板句;
+    ② `kind`/`message` 只在 `NET_ERROR_KINDS` 这个池子里挑,认不出就是 unknown;
+    ③ **不许为具体症状写一次性分支** —— 这里以前给"本机一个没在跑的代理"
+       专门写过一段"连接被它挡在最前面",那是把某台机器的环境问题当成产品缺陷。
+       所以下面专门断言:信封里不会再出现那种话。
     """
-    import os
+    import requests
 
-    keys = ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")
-    old = {k: os.environ.get(k) for k in keys}
-    try:
-        for key in keys:  # 先清干净,别让本机真实环境干扰断言
-            os.environ.pop(key, None)
-        os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7892"
-        tools = make_read_only_tools(_tree("proxy"), opener=DeadProxyOpener())
+    cases = [
+        (requests.exceptions.ConnectTimeout("连了 5 秒没反应"), "timeout"),
+        (requests.exceptions.ReadTimeout("读超时"), "timeout"),
+        # ProxyError 也是 ConnectionError 的子类 —— 这条在验分类顺序
+        (requests.exceptions.ProxyError("代理没接通"), "proxy"),
+        (requests.exceptions.SSLError("证书不过"), "tls"),
+        (requests.exceptions.TooManyRedirects("转太多圈"), "redirect_loop"),
+        (requests.exceptions.ConnectionError("底层 WinError 10061"), "connection"),
+    ]
+    for exc, expected in cases:
+        tools = make_read_only_tools(_tree("errs"), opener=RaiserOpener(exc))
         out = _call(tools, "http_get", {"url": "https://e.com/a"})
         assert out["ok"] is False
-        assert "10061" in out["error"]
-        assert "127.0.0.1:7892" in out["hint"]
-        assert "HTTPS_PROXY" in out["hint"]
+        assert out["error"] == str(exc), out        # 逐字原样
+        assert out["type"] == type(exc).__name__
+        assert out["kind"] == expected, (type(exc).__name__, out["kind"])
+        assert out["message"] == NET_ERROR_KINDS[expected]
 
-        # 没有代理变量时就不该冒出这句提示(别无中生有)
-        for key in keys:
-            os.environ.pop(key, None)
-        out2 = _call(tools, "http_get", {"url": "https://e.com/a"})
-        assert out2["ok"] is False
-        assert "hint" not in out2
-    finally:
-        for key, value in old.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+    # 池子里没有的 -> 老实说 unknown,message 也明说"不翻译"
+    tools = make_read_only_tools(_tree("errs2"),
+                                 opener=RaiserOpener(RuntimeError("说不清是什么")))
+    out = _call(tools, "http_get", {"url": "https://e.com/a"})
+    assert out["kind"] == "unknown"
+    assert out["error"] == "说不清是什么"
+    assert "不翻译" in out["message"]
+
+    # 那条一次性分支真的没了:信封里不再出现代理地址 / "挡在最前面"
+    blob = json.dumps(out, ensure_ascii=False)
+    assert "7892" not in blob and "挡在最前面" not in blob
 
 
 # ---------------- http_get ----------------
@@ -406,7 +414,7 @@ if __name__ == "__main__":
     test_web_search_wraps_provider_results()
     test_web_search_clamps_count_and_rejects_empty_query()
     test_web_search_provider_failure_becomes_envelope_not_exception()
-    test_network_failure_points_at_the_proxy_when_one_is_set()
+    test_network_errors_report_verbatim_error_plus_a_catalog_kind()
     test_http_get_returns_plain_text_and_truncates()
     test_http_get_rejects_bad_scheme_and_reports_http_errors()
     test_http_get_reads_charset_from_content_type()
