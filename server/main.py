@@ -257,31 +257,38 @@ async def pulse_autonomy():
     if engine._loop is None:
         raise HTTPException(status_code=503, detail="引擎未启动")
     sid = engine.life_session_id()
-    log = engine._store.load_log(sid)
     t0 = time.time()
-    budget = engine.begin_self_wake(log)  # 普通自走轮(脉冲)时间预算(同补写事件算法,2026-09)
-    if budget <= 0:
-        # 2026-09 拍板:窗口 [日志尾, 当前] 无事件 → 该轮不触发任何事件,安静结束
-        # (不调 LLM、不动日志)。UI 收到 quiet 即知"这轮无事可叙"。
-        return {"quiet": True,
-                "reason": "窗口 [日志尾 → 当前] 无事件,本轮安静结束",
-                "session_id": sid}
+    # 加载 → 决策 → 跑轮 → 落盘整段在 _lock 内(2026-09-17 修):store.load_log
+    # 无缓存(每次读盘返回新对象)、写盘是整体覆盖 —— 锁外加载的副本会覆盖掉
+    # 别人等待期间写的东西。见 docs/pitfalls/HISTORY.md §四。
+    quiet = False
     try:
         with engine._lock:
-            # 目标卡快照的人格覆盖(若有)在自走轮同样生效
-            snap = engine._store.get_session_settings(sid)
-            engine._loop.run_turn(
-                source="self", log=log,
-                system_prompt=(snap.get("system_prompt")
-                               if snap.get("system_prompt") else None),
-            )
-            engine._store.save_log(sid, log)
+            log = engine._store.load_log(sid)
+            budget = engine.begin_self_wake(log)  # 普通自走轮(脉冲)时间预算(同补写事件算法,2026-09)
+            if budget <= 0:
+                # 2026-09 拍板:窗口 [日志尾, 当前] 无事件 → 该轮不触发任何事件,
+                # 安静结束(不调 LLM、不动日志)。UI 收到 quiet 即知"这轮无事可叙"。
+                quiet = True
+            else:
+                # 目标卡快照的人格覆盖(若有)在自走轮同样生效
+                snap = engine._store.get_session_settings(sid)
+                engine._loop.run_turn(
+                    source="self", log=log,
+                    system_prompt=(snap.get("system_prompt")
+                                   if snap.get("system_prompt") else None),
+                )
+                engine._store.save_log(sid, log)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=500, detail=f"Autonomy pulse failed: {exc}"
         )
     finally:
         engine.end_self_wake()
+    if quiet:
+        return {"quiet": True,
+                "reason": "窗口 [日志尾 → 当前] 无事件,本轮安静结束",
+                "session_id": sid}
     return {"elapsed_ms": int((time.time() - t0) * 1000), "session_id": sid}
 
 

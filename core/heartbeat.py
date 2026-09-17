@@ -65,7 +65,6 @@ class Heartbeat:
         self._cycles = 0
         self._last_result: HeartbeatResult | None = None
         self._last_wake_at: float | None = None
-        self._busy_until: float = 0.0  # 前台占用时,心跳让路到此刻
 
     # ---------- 生命周期 ----------
 
@@ -92,7 +91,6 @@ class Heartbeat:
             "cycles": self._cycles,
             "last": self._last_result,
             "last_wake_at": self._last_wake_at,
-            "busy_until": self._busy_until,
         }
 
     # ---------- 内部 ----------
@@ -112,13 +110,6 @@ class Heartbeat:
 
     def _cycle_once(self) -> HeartbeatResult:
         now = time.time()
-        # 前台占用(loop 锁被用户 turn 拿着)时,让路
-        if now < self._busy_until:
-            return HeartbeatResult(
-                cycle=self._cycles, woke=False,
-                reason="yield-foreground",
-                interval=self.min_interval,
-            )
         try:
             if not self.gate.check(now):
                 return HeartbeatResult(
@@ -162,7 +153,3 @@ class Heartbeat:
 
     def _bounded(self, seconds: float) -> float:
         return max(self.min_interval, min(self.max_interval, seconds))
-
-    def mark_foreground_busy(self, seconds: float) -> None:
-        """前台用户 turn 占用期间,心跳让路(循环锁 + 此处让路双保险)。"""
-        self._busy_until = time.time() + seconds

@@ -68,8 +68,7 @@ async def chat_stream(request: Request, body: ChatRequest):
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
 
-    log = engine._session_log(sid)
-    user_seq_before = log.last_seq()
+    # ⚠️ 不在这里加载日志!必须等拿到引擎锁之后再 load —— 见 _run() 里的说明。
 
     # 真正的流式:后台线程跑 run_turn,on_chunk 实时投递到队列,
     # SSE 生成器逐条取出转发 —— 与内核 on_chunk 回调直连。
@@ -100,6 +99,16 @@ async def chat_stream(request: Request, body: ChatRequest):
                 engine._live(f"拿到引擎,排队共 {time.time() - t_wait0:.1f}s,开始回复")
             t_turn0 = time.time()
             try:
+                # 日志**必须**拿到锁之后才加载(2026-09-17 修):
+                # store.load_log 无缓存 —— 每次读盘返回**新对象**;而写盘是
+                # **整体覆盖**。锁外加载 = 拿了把锁去覆盖别人等待期间写的东西:
+                #   * 补写跑到一半你发消息 → 你这份是旧副本 → 存盘把补写抹掉;
+                #   * 连发两条 → 第二条读盘时第一条还没落盘 → 她看不到上一条,
+                #     存盘时还把第一条覆盖掉。
+                # 修法 = 把"加载 → 跑轮 → 落盘"整段纳入同一把锁(engine._lock
+                # 的注释本来就写着"护 store 落盘",此前只护了一半)。
+                # 详见 docs/pitfalls/HISTORY.md §四。
+                log = engine._session_log(sid)
                 # 产品旋钮(2026-09 真接线 + 任务6 路线 B):
                 # - 当轮显式传的 > 会话快照 > 全局默认(engine.resolve_turn_settings)
                 # - temperature/max_rounds/system_prompt/model 四件套同一合并链

@@ -166,7 +166,7 @@ docs/protocols/LIFE_BACKFILL.md §6)。
 - `.gitignore` 已含 `data/`(2026-09):会话/生活日志与图片不入库。
 
 > 2026-09 修订:本文为"结构身躯"(布局/取舍/UI)历史成稿,若干过时项清单见
-> `docs/pitfalls/HISTORY.md §四`(git init 早已做、per-card life 取代 `_life`、
+> `docs/pitfalls/HISTORY.md §五`(git init 早已做、per-card life 取代 `_life`、
 > 测试数/行数以代码为准)。当前真值排序与完整文档地图见 `docs/README.md`。
 
 ## 7. 演进规则(小步可闭合)

@@ -434,21 +434,26 @@ class LifeLoop:
         # 且走 cursor,不在这里重复抽。
         is_self = source == "self"
         try:
-            log = _store.load_log(sid)
-            if is_self:
-                if begin_self_wake(log) <= 0:
-                    # 2026-09 拍板落地:窗口 [日志尾, 当前] 无事件 → 该轮不触发
-                    # 任何事件,**安静结束** —— 不调 LLM(不产无预算碎碎念)、
-                    # 不动日志、不进冷却(心跳从同一锚继续等下一件事件)。
-                    tail = _log_tail_epoch(log)
-                    now = _clock_override["ts"] or time.time()
-                    f_tail = (time.strftime("%m-%d %H:%M", time.localtime(tail))
-                              if tail else "—")
-                    _live(f"{tag}安静结束:窗口 {f_tail}→"
-                          f"{time.strftime('%m-%d %H:%M', time.localtime(now))}"
-                          " 无事件,不调 LLM")
-                    return None
+            # 加载 → 决策 → 跑轮 → 落盘 = **一个事务,整段在 _lock 内**。
+            # (2026-09-17 修)store.load_log 无缓存(每次读盘返回新对象),写盘是
+            # 整体覆盖 —— 锁外加载的副本拿锁后会**覆盖掉别人等待期间写的东西**。
+            # _lock 的注释本来就写着"护 store 落盘",此前只护了一半。
+            # 见 docs/pitfalls/HISTORY.md §四。
             with _lock:
+                log = _store.load_log(sid)
+                if is_self:
+                    if begin_self_wake(log) <= 0:
+                        # 2026-09 拍板落地:窗口 [日志尾, 当前] 无事件 → 该轮不触发
+                        # 任何事件,**安静结束** —— 不调 LLM(不产无预算碎碎念)、
+                        # 不动日志、不进冷却(心跳从同一锚继续等下一件事件)。
+                        tail = _log_tail_epoch(log)
+                        now = _clock_override["ts"] or time.time()
+                        f_tail = (time.strftime("%m-%d %H:%M", time.localtime(tail))
+                                  if tail else "—")
+                        _live(f"{tag}安静结束:窗口 {f_tail}→"
+                              f"{time.strftime('%m-%d %H:%M', time.localtime(now))}"
+                              " 无事件,不调 LLM")
+                        return None
                 # 该卡快照的人格覆盖(若有)在自走轮同样生效
                 snap = _store.get_session_settings(sid)
                 result = _loop.run_turn(

@@ -224,7 +224,6 @@ async def get_runtime_status():
             "running": s["running"],
             "cycles": s["cycles"],
             "last_wake_at": s["last_wake_at"],
-            "busy_until": s["busy_until"],
             "last": s["last"].reason if s["last"] else None,
         }
     return {

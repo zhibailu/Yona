@@ -64,6 +64,6 @@
 - 文档分层已完成(2026-09):五个旧根文档拆/迁入 `docs/`(VISION/DESIGN→decisions,
   STRUCTURE→docs/STRUCTURE, LIFE_BACKFILL→protocols;MAP 拆成 decisions/TIMELINE +
   tasks/{PROGRESS,OPEN,RULES})。STRUCTURE 有**陈旧矛盾**(git init/_life/行数/
-  测试数),清单见 `docs/pitfalls/HISTORY.md §四`。
+  测试数),清单见 `docs/pitfalls/HISTORY.md §五`。
 - 当前真值排序:见 `docs/README.md`(① decisions/TIMELINE 拍板正典 + params.py
   ✅/⏳ ② personas 文案 ③ 每目录 README + 代码)。

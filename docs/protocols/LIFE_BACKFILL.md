@@ -138,30 +138,43 @@ tools=ToolRegistry([]), self_note=note)`。她只有一个大脑 —— 差异�
   (0/1/2/3)喂参 —— 旧 builder 零改动向后兼容
 - `run_turn(..., self_note=None)` 等原有接口不变
 
-### 3.2 启动链路(server/main.py)
+### 3.2 启动链路(server/app/engine.py)
+
+> 2026-09-17 校正:本节此前写的是**旧的全局生活流版**(`_last_active_anywhere`
+> / "她这个人跨会话一致"),已被 §12b 每卡 life 取代。下为**当前真实链路**
+> (以代码为准:`_maybe_backfill_life` / `life_session_id`)。
 
 ```
-lifespan 启动
- └─ _maybe_backfill_life()            # 启动检测
-     ├─ _last_active_anywhere()       # 全日志(会话+_life)最后一条事件的时间
-     ├─ _wake_decision()              # 纯函数:首启不补 / gap<30min 正常重启 /
-     │                                #   gap≥30min → 补写
-     └─ 后台线程(等 5s,防抢用户首条消息)
-         ├─ LifeSampler(last_active, now).sample() → events[](见 §4)
+start()(lifespan 调一次)
+ └─ _maybe_backfill_life()                    # 只在这一处被调用
+     ├─ life_session_id()                     # = store.life_target_session_id()
+     │                                        #   「最近激活的卡」= updated_at 最新
+     │                                        #   且日志里有真人 user/message 的卡
+     │                                        #   (没聊过任何卡 → Yona 旗舰兜底)
+     ├─ last_active = 该卡日志尾事件时间
+     ├─ _wake_decision(last_active, now)      # 纯函数:首启不补 / gap<30min 正常重启
+     │                                        #   / gap≥30min → 补写
+     └─ 后台线程 "yona-backfill"(锁**外**先睡 BACKFILL_START_DELAY_SEC)
+         ├─ LifeSampler(last_active, now).sample() → events[]
          ├─ 若无事件 → 跳过(离线太短/稀疏/没判定中,正常)
-         └─ 逐事件(全在 _lock 内):
-             ├─ 组 self_note(预算上限 + gap_note,见 §5)
-             ├─ life_log.set_time_cursor(e.start); _backfill_clock["ts"] = e.start
-             ├─ _loop.run_turn(source="self", log=life_log, tools=空, self_note=note)
-             └─ finally: clear_time_cursor(); _backfill_clock["ts"] = 0.0
- 收尾: _life_gate.mark_self()(进入心跳冷却,节奏衔接)
+         └─ with _lock:(以下全在锁内)
+             ├─ card_log = load_log(sid)
+             ├─ snap = 该卡快照的人格覆盖(有则用)
+             └─ 逐事件:
+                 ├─ 组 self_note(预算上限 + gap_note)
+                 ├─ card_log.set_time_cursor(e.start); _backfill_clock["ts"] = e.start
+                 ├─ _loop.run_turn(source="self", log=card_log, tools=空, self_note, system_prompt=人格)
+                 └─ finally: clear_time_cursor(); _backfill_clock["ts"] = 0.0
+         收尾: _life_gate.mark_self()(进入心跳冷却,节奏衔接)
 ```
 
-- `_last_active_anywhere`:锚点**不能只看 `_life`** —— 用户会话里跟主人的对话
-  也是她活着的证据(她这个人跨会话一致)。取所有日志最后一条事件的时间。
+- **只处理一张卡** —— 目标卡 = 那一刻"最近激活的卡"。这是 §12b 的拍板
+  ("只补'最近激活的卡';其它卡等下次被激活再补")。**注意:后半句目前没有
+  实现落点**,见 §9。
 - 事件之间日志历史累积 → 逐段叙事连贯自发涌现(不需要显式桥接)。
 - `_backfill_clock` 只在回放轮内被设;补写 composer 的 world section 现取它
-  (模型看到的时间 = 历史时刻,墙钟不混入)。
+  (模型看到的时间 = 历史时刻,墙钟不混入)。**它是进程级全局** —— 多卡并发时
+  会串台,见 §9.4。
 
 ---
 
@@ -293,3 +306,152 @@ gap_note(i>0): 距上一件事做完已过约 X(>60s) / 你上一件事刚做完
 4. **目录 src 化**:模块横切 server/core/character,当前不拆;整体稳定后
    若要整理布局(引入 src/docs),本模块文档随迁。
 5. 演示:`YONA_GATE_HOT=1`(心跳更勤);`YONA_DATA_DIR` 指向临时目录防脏。
+
+---
+
+## 9. ⏳ 多卡补写 × 用户消息的时序(2026-09-17 立案,**方案待拍**)
+
+> 本节是**方案**,不是拍板。所有条目 ⏳,不许当已定使用。
+> 起因:实现审计发现 §12b 那句"其它卡等下次被激活再补"**没有落点**;
+> 顺带查出同一个时序问题的另外两面。**三面是同一个根因。**
+
+### 9.1 三个缺口
+
+| # | 缺口 | 现状(代码事实) |
+|---|---|---|
+| ① | 「其它卡等**下次被激活**再补」没实现 | `_maybe_backfill_life()` 全项目只被 `start()` 调一次(`engine.py:997`)。"某卡被激活"这个事件上**什么都没挂** |
+| ② | 补写窗口在睡眠期**过期** | 窗口起点 `last_active` 是启动时闭包捕获的;终点是**睡醒后的** `time.time()`。两者之间发生的事(用户说话)被算进窗口,而事件却 append 在用户消息**之后** |
+| ③ | `_backfill_clock` 是**进程全局** | 一个副本服务多张卡。多卡并发补写会互相改写世界时间 |
+
+### 9.2 根因一句话
+
+> **补写的语义是「你不在时她的生活」。你的消息一进日志,那段生活就结束了。**
+
+于是正确性要求是:
+
+> **补写事件必须落在「你出现」之前。**
+
+① ② ③ 都是这一条被破坏的不同表现:① 没触发,② 触发晚了,③ 同时触发多张卡。
+
+### 9.3 现状为什么不满足:`BACKFILL_START_DELAY_SEC` 是矛盾点
+
+它的原意是"等服务起来 + 防抢用户首条消息"(`params.py` ⏳ 沿用值)。但:
+
+```
+start() 决定补写 ──► 线程 sleep(5s)【锁外】──► 抢锁 ──► 跑 N 轮
+                        ↑
+                   这 5 秒里用户发消息 → 用户先拿锁、先落盘
+                   → 补写醒来时窗口已经过期,事件排到你后面
+```
+
+**"让路给用户"和"补写最优先"是直接冲突的两件事。** 现在代码选的是前者,
+而 §12b 的语义(以及"她离线期间也在生活")要求的是后者。
+
+### 9.4 方案候选(三选一,或组合)
+
+#### 方案 A · 补写占队首(推荐)
+
+补写线程**起来就去抢 `engine._lock`**,抢到后:
+重新读日志尾 → 算窗口 → 采样 → 一口气跑完 N 轮 → 释放。
+
+- 延迟期的语义从"睡 5 秒让路"改成"等引擎 ready 就抢"(不空转)。
+- 进锁后**重算窗口**:若日志尾前进了(有东西抢先写了),按新尾重算或放弃本轮。
+
+| | |
+|---|---|
+| ✅ | 语义最直:**"她补完日子,才轮到你说话"**;日志 seq 与时间序天然一致,无需新机制 |
+| ✅ | 与用户原话一致:"进程重启级别的补写轮,物理上就是最优先级的" |
+| ⚠️ | 启动后**首条消息要等补写跑完**(N 轮 × LLM 延迟,粗估 30–90s)。UI 有 busy 帧,不是静默干等 |
+| ⚠️ | 需要产品接受"开机第一句话要多等一会儿" |
+
+#### 方案 B · 补写让路 + 投影锚定
+
+保持"用户先走";补写轮带一个 **anchor**,`derive_messages` 时把补写段
+**渲染到用户消息之前**。日志原文一字不动(与 compact / shadow 同哲学:
+"折叠 = 视图不是日志")。
+
+| | |
+|---|---|
+| ✅ | 启动体验不变(首条消息不等) |
+| ✅ | 机制**已有雏形**:`session_log.py` 的 `anchored` 排序 + `replaces.start` 锚点 |
+| ⚠️ | 要把 anchor 从"仅 `user/message` + `replaces`"扩到"任意轮的整段前置" |
+| ⚠️ | **日志序 ≠ 投影序**,必须明确定义:时间线面板、`surface` 三态、`last_turns` 裁剪各按哪套 |
+
+#### 方案 C · 补写到"用户安静下来"再跑
+
+补写推迟到"最后一条用户消息之后静默 N 秒"。窗口**实时重算**。
+
+| | |
+|---|---|
+| ✅ | 不抢首条消息,也不产生错位(它等到你不在时才跑) |
+| ⚠️ | 你一直聊 → 补写**永远不跑**;且"你出现的那一刻"需要单独存(否则窗口起点会被你的最后一条消息顶掉) |
+| ⚠️ | 引入一个新的"静默计时"参数(又一个 ⏳ 旋钮) |
+
+> **共同点**:三个方案都需要 9.5 的地基。区别只在"补写与用户谁先写日志"。
+
+### 9.5 地基(#③):`_backfill_clock` 必须改,三个方案都要
+
+现在同一个信息存了**两份**:
+
+```python
+card_log.set_time_cursor(e.start)     # engine.py:859  ← 挂在卡上 ✅
+_backfill_clock["ts"] = e.start       # engine.py:860  ← 挂在进程上 ❌
+```
+
+`log.time_cursor` 挂在 `SessionLog` 实例上是**对的**(每卡各带各的);
+`_backfill_clock` 是模块全局,**一个副本服务多张卡**。
+
+**卡住改动的只有一处**:`engine.py:646` 的闭包
+
+```python
+world_now=lambda: time.localtime(_backfill_clock["ts"])
+```
+
+它在 `_build_engine` 时造好,**拿不到 log、也不知道自己在服务哪张卡**。
+另外两个读点(`:602` 的 `_now(log)`、`:664` 的 `sys_by_source`)**手里都有 log**。
+
+**改法**:把世界时间当**参数**传进 composer(三参 builder 本来就收到 log),
+或让 `world_now` 读 `log.time_cursor`;产品路径两者本就同时设成同一个值
+(两个标志一起判是为了区分"真回放"和"实验台拨时间" —— 可换成显式标志)。
+
+> 判据(记进 `docs/pitfalls/HISTORY.md §四`):**一个变量的值如果是「本卡的」,
+> 它就不该住在模块全局。**
+
+### 9.6 多卡的触发点(①):该挂在哪
+
+"被激活"= **有人在那张卡里说了话**(`store.life_target_session_id` 的定义:
+`updated_at` 最新 **且** 日志里有真人 `user/message`)。
+
+所以唯一自然的落点是:**那张卡即将跑聊天轮之前** —— 在 `chat.py` 拿到锁之后、
+`run_turn` 之前,检查"这张卡上次活跃到现在够不够补写阈值",够就先补。
+
+**但这会立刻撞上 9.2 的时序问题**:在"用户即将说话"的时刻补写,
+事件必然排到用户消息之后。
+
+所以:
+
+> **① 不能单独修。它必须和 9.4 选定的方案一起落地。**
+
+三种组合:
+
+| 配 A(占队首) | 在聊天轮**之前**、同一把锁内补写 → 事件在你消息之前 ✓ |
+| 配 B(投影锚定) | 补写可在任意时刻跑,投影负责排到正确位置 |
+| 配 C(等静默) | 你在这张卡说话 → 推迟到静默 → 补写窗口 = [上次活跃, 你的第一条] |
+
+### 9.7 还需要一起定的
+
+| 项 | 说明 |
+|---|---|
+| `BACKFILL_START_DELAY_SEC` 语义 | 现"锁外睡 5s 让路"→ A 方案下应改为"等引擎 ready 的最小延迟" |
+| 每卡独立作息? | §12b 现拍"全局单套闸门,不做每卡独立节奏"。未来要夜猫子角色,**不用 fork**(`ServerGate`/`LifeSampler` 构造已全参数化),但要换**持有点**:`_life_gate` / `_heartbeat` 从"全局一个"变"每卡一个" |
+| `Heartbeat` / `LifeLoop` | 都是普通类、构造全参数化,造 N 个可行 —— 未来那条路是开着的 |
+
+### 9.8 迁移影响面(选定方案后要动的文件)
+
+| 文件 | A | B | C |
+|---|---|---|---|
+| `server/app/engine.py`(`_maybe_backfill_life`) | 抢锁时机 + 窗口重算 | 加 anchor | 加静默判定 |
+| `server/app/api/chat.py` | 不变 | 不变 | 加"推迟补写"钩子 |
+| `core/session_log.py` | 不变 | 扩 anchor 到整段前置 | 不变 |
+| `server/app/engine.py`(`_backfill_clock`) | 改(参数化) | 改 | 改 |
+| `server/params.py` | 改 `BACKFILL_START_DELAY_SEC` 语义 | 不变 | 新增静默窗口参数 |
