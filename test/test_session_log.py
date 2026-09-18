@@ -1,11 +1,14 @@
 """SessionLog 自测：一轮带工具的完整 turn，验证投影与回放。"""
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.loop import AgentLoop
 from core.session_log import SessionLog
+from core.tools import ToolRegistry
 
 
 def build_turn() -> SessionLog:
@@ -322,6 +325,132 @@ def _append_completed_self_turn(log, n: int, text: str, at: float) -> None:
     log.append("turn/end", turn=n, reason={"kind": "completed"}, at=at)
 
 
+def _append_human_turn(log, n: int, at: float, text: str | None = None) -> None:
+    """手造一轮完整已结束的**真人**轮(user -> assistant),时刻可钉。"""
+    log.append("turn/start", turn=n, source="user", at=at)
+    log.append("user/message",
+               content=[{"type": "text", "text": text or f"问{n}"}],
+               source="user", turn=n, at=at)
+    log.append("step/start", turn=n, step=1, at=at)
+    log.append("assistant/message",
+               content=[{"type": "text", "text": f"答{n}"}], turn=n, step=1, at=at)
+    log.append("step/end", turn=n, step=1, at=at)
+    log.append("turn/end", turn=n, reason={"kind": "completed"}, at=at)
+
+
+def _stamp(at: float) -> str:
+    """测试里算期望的时间戳(与内核 _stamp_prefix 的默认格式一致)。"""
+    return time.strftime("%m-%d %H:%M", time.localtime(at))
+
+
+# ---------- 真人消息时间戳(2026-09-17:给历史补时间轴) ----------
+# 背景:历史里没有时间轴 —— 每条消息都不带时刻,`[当前时间]` 每轮被覆盖。
+# 于是"现在几点"她知道,"距上一条多久"她算不出来。实测症状:22:14 与 23:24
+# 那两句(隔 69 分钟)被她读成连续的("刚不是说了嘛,你连着问两遍")。
+# 这一组钉住三件事:**只标真人侧**、**只标窗口内的**、**空串 = 行为不变**。
+
+T0 = 1_700_000_000.0
+
+
+def test_user_time_prefix_marks_human_messages_only():
+    """真人消息带时间戳;assistant 与自走占位【都不许】带。
+
+    为什么只标真人侧:模型模仿的是**它自己的输出** —— 自语那条标记就是这么
+    被抄进正文的(日志里已有 2 条 assistant 正文自带标记)。再给 assistant
+    侧加一个可抄模板 = 重蹈覆辙。她的回复与真人消息同轮、时刻几乎相同,
+    标了真人就等于把她的也夹住了。
+    """
+    log = SessionLog("t")
+    _append_completed_self_turn(log, 1, "星期天晚上,不想动。", at=T0)
+    _append_human_turn(log, 2, at=T0 + 4200)
+
+    msgs = log.derive_messages(self_talk_prefix="〔自语·{time}〕",
+                               user_time_prefix="[{time}]")
+
+    users = [m for m in msgs if m["role"] == "user"]
+    assert len(users) == 1, f"自走占位串不该进历史: {users}"
+    assert users[0]["content"][0]["text"] == f"[{_stamp(T0 + 4200)}]\n问2", users[0]
+
+    # assistant 侧:自语带**自语**标记(原样),真人轮的回复一个字不加
+    assistants = [m for m in msgs if m["role"] == "assistant"]
+    assert assistants[0]["content"][0]["text"].startswith("〔自语·"), assistants[0]
+    assert assistants[1]["content"][0]["text"] == "答2", (
+        f"assistant 被标了时间戳 —— 那正是会被抄进正文的形式: {assistants[1]}"
+    )
+
+
+def test_user_time_prefix_placeholder_and_zero_semantics():
+    """{time} 换成时刻;不含 {time} 则后面补一个;空串(默认)= 完全不改。"""
+    log = SessionLog("t")
+    _append_human_turn(log, 1, at=T0)
+    stamp = _stamp(T0)
+
+    placed = log.derive_messages(user_time_prefix="〔{time}〕")
+    assert placed[0]["content"][0]["text"] == f"〔{stamp}〕\n问1", placed[0]
+    # 与 self_talk_prefix 同款约定:模板没写 {time} 就自动补一个时间戳
+    appended = log.derive_messages(user_time_prefix="〔投递〕")
+    assert appended[0]["content"][0]["text"] == f"〔投递〕 {stamp}\n问1", appended[0]
+    # 空串 = 原行为(回归保护)
+    assert log.derive_messages()[0]["content"][0]["text"] == "问1"
+    assert log.derive_messages() == log.derive_messages(user_time_prefix="")
+
+
+def test_user_time_prefix_only_covers_the_window():
+    """标签只跟着**已经在窗口里**的消息:窗口内一致覆盖。
+
+    裁剪发生在打标之前,所以不会出现"同一条历史里有的有、有的没有" ——
+    那种不一致是邀请模型去补齐规律。
+    """
+    log = SessionLog("t")
+    for n in (1, 2, 3):
+        _append_human_turn(log, n, at=T0 + n * 3600)
+
+    msgs = log.derive_messages(last_turns=1, user_time_prefix="[{time}]")
+    users = [m for m in msgs if m["role"] == "user"]
+    assert len(users) == 1, users
+    assert users[0]["content"][0]["text"].startswith(f"[{_stamp(T0 + 3 * 3600)}]"), users
+    # 窗口外的整轮连标签带正文一起不在
+    joined = str(msgs)
+    assert "问1" not in joined and "问2" not in joined and "问3" in joined
+
+    # 全量窗口:三条真人消息都带,一条不落
+    allmsgs = log.derive_messages(user_time_prefix="[{time}]")
+    users_all = [m for m in allmsgs if m["role"] == "user"]
+    assert len(users_all) == 3
+    assert all(m["content"][0]["text"].startswith("[") for m in users_all), users_all
+
+
+def test_user_time_prefix_labels_first_text_block_only():
+    """一条消息只标一次:多块消息不在正文里叠出第二行标记。"""
+    log = SessionLog("t")
+    log.append("turn/start", turn=1, source="user", at=T0)
+    log.append("user/message",
+               content=[{"type": "text", "text": "前半"},
+                        {"type": "text", "text": "后半"}],
+               source="user", turn=1, at=T0)
+
+    blocks = log.derive_messages(user_time_prefix="[{time}]")[0]["content"]
+    assert blocks[0]["text"] == f"[{_stamp(T0)}]\n前半", blocks
+    assert blocks[1]["text"] == "后半", f"第二条文本块被重复标注: {blocks}"
+
+
+def test_agent_loop_passes_user_time_prefix_down():
+    """装配层给的模板真的到达投影(透传,不是只存了个属性)。"""
+    log = SessionLog("t")
+    _append_human_turn(log, 1, at=T0)
+    registry = ToolRegistry([])
+
+    loop = AgentLoop(log, None, registry, user_time_prefix="〔{time}〕")
+    msgs = loop._build_messages(registry, "user", log)
+    users = [m for m in msgs if m["role"] == "user"]
+    assert users and users[0]["content"][0]["text"] == f"〔{_stamp(T0)}〕\n问1", msgs
+
+    # 不传 = 行为不变(内核默认关)
+    bare = AgentLoop(log, None, registry)
+    msgs2 = bare._build_messages(registry, "user", log)
+    assert [m for m in msgs2 if m["role"] == "user"][0]["content"][0]["text"] == "问1"
+
+
 def test_self_talk_prefix_marks_ended_self_turns_only():
     """自走轮自语进上下文:已结束自走轮的 assistant 前拼「前缀 时间戳」行,
     真人轮的消息不加(2026-09:避免孤立 assistant 冒充对用户说的话)。"""
@@ -436,6 +565,11 @@ if __name__ == "__main__":
     test_replace_persists_roundtrip()
     test_last_turns_window_keeps_recent_ended_plus_open_turn()
     test_last_turns_drops_whole_turns_never_splits_tool_pairs()
+    test_user_time_prefix_marks_human_messages_only()
+    test_user_time_prefix_placeholder_and_zero_semantics()
+    test_user_time_prefix_only_covers_the_window()
+    test_user_time_prefix_labels_first_text_block_only()
+    test_agent_loop_passes_user_time_prefix_down()
     test_self_talk_prefix_marks_ended_self_turns_only()
     test_self_talk_prefix_time_placeholder_and_zero_semantics()
     print("SessionLog all tests passed")

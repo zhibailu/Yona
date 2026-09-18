@@ -777,6 +777,11 @@ def _build_engine(cfg: dict | None = None) -> None:
         fold_tool_traces=False,
         # 自走轮自语进上下文的前缀(内容层文案;见 personas.SELF_TALK_PREFIX)
         self_talk_prefix=personas_mod.SELF_TALK_PREFIX,
+        # 真人消息进上下文的时间戳(内容层模板;见 personas.USER_TIME_PREFIX)。
+        # 2026-09-17:历史里没有时间轴,她算不出"距上一条多久" —— 两条相隔
+        # 69 分钟的对话被她读成了连续的("刚不是说了嘛,你连着问两遍")。
+        # 只作用于 source=="user" 的消息,自走占位不打标(见 derive_messages)。
+        user_time_prefix=personas_mod.USER_TIME_PREFIX,
     )
 
 

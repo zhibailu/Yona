@@ -29,6 +29,32 @@ Block = TextBlock | ReasoningBlock | ToolCallBlock | ToolResultBlock
 Message = dict[str, Any]  # {"role": ..., "content": [...]}
 
 
+def _stamp_prefix(prefix: str, ts: float, fmt: str = "%m-%d %H:%M") -> str:
+    """把"带 {time} 的标记模板"渲染成一行标记(内容层给模板,内核只填时间)。
+
+    {time} 就地替换;模板不含 {time} 则后面补一个时间戳 ——
+    与 SELF_TALK_PREFIX / USER_TIME_PREFIX 同一套约定。
+    """
+    stamp = time.strftime(fmt, time.localtime(ts))
+    if "{time}" in prefix:
+        return prefix.replace("{time}", stamp)
+    return f"{prefix} {stamp}"
+
+
+def _label_first_text(content: Any, label: str) -> Any:
+    """给内容列表的**第一条文本块**前面加一行标记;没有文本块则原样返回。
+
+    只标第一条:一条消息可能带多个块(text / tool-call),标一次就够 ——
+    每条都标会在正文里叠出多行标记(而正文是模型会"接着写"的地方)。
+    """
+    for i, b in enumerate(content):
+        if isinstance(b, dict) and b.get("type") == "text":
+            out = list(content)
+            out[i] = {**b, "text": f"{label}\n{b.get('text', '')}"}
+            return out
+    return content
+
+
 @dataclass
 class Event:
     """一条不可变日志事件。"""
@@ -231,6 +257,7 @@ class SessionLog:
         retained_tools: set[str] | None = None,
         last_turns: int | None = None,
         self_talk_prefix: str = "",
+        user_time_prefix: str = "",
     ) -> list[Message]:
         """
         把日志投影成喂给模型的 messages（按事件顺序）。
@@ -269,6 +296,21 @@ class SessionLog:
         0 或 None = 全量(默认,行为不变)。窗口单位是"轮"不是"消息",
         UI"保留最近 N 轮对话"即此语义;last_n 仍是粗暴的消息尾截,保留给
         调用方自行选择。
+
+        user_time_prefix(2026-09-17 加):真人消息前拼一行「模板(含 {time})」
+        再接正文,{time} = 那条消息发生的时刻。**历史里没有时间轴** ——
+        每条消息都不带时刻,`[当前时间]` 每轮被覆盖、历史不留痕,于是
+        "现在几点"她知道,"距上一条多久"她算不出来(减法没有输入);实测
+        两条相隔 69 分钟的话被她读成连续的("刚不是说了嘛,你连着问两遍")。
+        **只标真人侧(source=="user")**,理由两条:
+          1. 模型模仿的是**它自己的输出** —— 自走自语那条标记就是这么被抄进
+             正文的,不能再给 assistant 侧加新的可抄模板;
+          2. 她的回复与真人消息同轮、时刻几乎相同,**标了真人就等于夹住了她的**。
+        自走轮的占位消息(source="self")不打标;source 缺省按 "user" 处理
+        (与 _last_user_epoch 同一口径,老日志不掉标)。
+        后缀/前缀形状由调用方给(如 personas.USER_TIME_PREFIX),空串 = 不加
+        (默认,行为不变)。**标签只跟着已经在窗口里的消息** —— 裁剪先发生,
+        所以窗口内是一致覆盖,不会出现"有的有、有的没有"。
         """
         retained = retained_tools or set()
         # surface 遮蔽(VISION 决策 9):被 surface/shadow 注解覆盖的事件不进投影。
@@ -335,9 +377,16 @@ class SessionLog:
                 # 自走轮占位串:已结束轮的不进历史(见上注释);当前轮的保留(触发点)。
                 if data.get("source") == "self" and data.get("turn") in ended_turns:
                     continue
+                content = data["content"]
+                # 真人消息打时间戳(2026-09-17):历史里没有时间轴,模型推不出
+                # "距上一条多久";只标真人侧,理由见 docstring 的 user_time_prefix。
+                if user_time_prefix and data.get("source", "user") == "user":
+                    content = _label_first_text(
+                        content, _stamp_prefix(user_time_prefix, event.time)
+                    )
                 order += 1
                 anchored.append(
-                    (anchor, order, {"role": "user", "content": data["content"]})
+                    (anchor, order, {"role": "user", "content": content})
                 )
             elif event.type == "assistant/message":
                 content = data["content"]
@@ -356,24 +405,12 @@ class SessionLog:
                 # 「前缀 时间戳」一行再接正文 —— 她独处时说的话进真人聊天上下文
                 # 时带上自己的时间戳,不冒充"对用户说的";前缀文案由调用方给
                 # (personas.SELF_TALK_PREFIX),留空 = 不加标记。
+                # 只给第一条文本块打标;纯 tool-call 消息(无自语文本)原样返回。
                 if self_talk_prefix and data.get("turn") in self_turns \
                         and data.get("turn") in ended_turns:
-                    ts = time.strftime(
-                        "%m-%d %H:%M", time.localtime(event.time)
+                    content = _label_first_text(
+                        content, _stamp_prefix(self_talk_prefix, event.time)
                     )
-                    if "{time}" in self_talk_prefix:
-                        label = self_talk_prefix.replace("{time}", ts)
-                    else:
-                        label = f"{self_talk_prefix} {ts}"
-                    # 只给第一条文本块打标;纯 tool-call 消息(无自语文本)跳过
-                    for i, b in enumerate(content):
-                        if b.get("type") == "text":
-                            content = list(content)
-                            content[i] = {
-                                **b,
-                                "text": f"{label}\n{b.get('text', '')}",
-                            }
-                            break
                 order += 1
                 anchored.append(
                     (anchor, order, {"role": "assistant", "content": content})

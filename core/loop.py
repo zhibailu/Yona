@@ -52,6 +52,7 @@ class AgentLoop:
         on_chunk: Callable[[dict[str, Any]], None] | None = None,
         fold_tool_traces: bool = False,
         self_talk_prefix: str = "",
+        user_time_prefix: str = "",
     ) -> None:
         self.log = log
         self.llm = llm
@@ -60,6 +61,11 @@ class AgentLoop:
         # (透传给 derive_messages;内容层提供,如 personas.SELF_TALK_PREFIX)。
         # 空串 = 不加标记。任何轮(含 user 聊天轮)看到历史里的自语都带标记。
         self.self_talk_prefix = self_talk_prefix
+        # user_time_prefix(2026-09-17 加):真人消息进上下文时的时间戳模板
+        # (透传给 derive_messages;内容层提供,如 personas.USER_TIME_PREFIX)。
+        # 空串 = 不加标记。只作用于 source=="user" 的消息 —— 自走占位不打标。
+        # 为什么要有:历史里没有时间轴,她推不出"距上一条多久"(见 derive_messages)。
+        self.user_time_prefix = user_time_prefix
         # system_prompt:静态字符串,或 builder callable。
         # builder 每 step 现取,拿到本轮 registry(与 schema 同批工具);
         # builder 可按接受参数数拿到更多上下文:
@@ -267,6 +273,7 @@ class AgentLoop:
                 retained_tools=self._retained,
                 last_turns=max_rounds if max_rounds else None,
                 self_talk_prefix=self.self_talk_prefix,
+                user_time_prefix=self.user_time_prefix,
             )
         )
         return messages
