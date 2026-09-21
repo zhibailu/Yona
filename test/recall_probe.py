@@ -1335,6 +1335,11 @@ def main() -> None:
         print(f"    | {line}")
 
     # messages 对比
+    #
+    # 【2026-09-21 标 · ❌ 本节已被产品拍板取代】往事段**不做**(往事只走 `recall`
+    # 工具),而且独处轮**整条不进投影**(连窗口名额都不占)。所以下面那两臂
+    # ("现状" vs "往事出窗")现在**必然相等** —— 留着只是"出窗"这件事的历史对照,
+    # 别再拿它当 A/B 证据引用。往事段的渲染(上面那段)同理,只剩史料价值。
     self_turns = {t["turn"] for t in turns if t["source"] == "self"}
     kept = [e for e in log.events
             if not (e.data.get("turn") in self_turns
@@ -1343,7 +1348,6 @@ def main() -> None:
 
     def _stats(lg, tag):
         msgs = lg.derive_messages(last_turns=12,
-                                  life_event_prefix=P.LIFE_EVENT_PREFIX,
                                   user_time_prefix=P.USER_TIME_PREFIX)
         chars = sum(len(json.dumps(m.get("content"), ensure_ascii=False)) for m in msgs)
         role = collections.Counter(m["role"] for m in msgs)
@@ -1355,7 +1359,7 @@ def main() -> None:
     print("  对话窗口(last_turns=12):")
     _stats(log, "现状")
     _stats(log_after, "往事出窗")
-    print(f"  + 往事段 {len(body)} 字")
+    print(f"  + 往事段 {len(body)} 字(❌ 2026-09-21 已取消,此项不再进产品)")
 
     # ---------------- B. 检索工具 ----------------
     print("\n" + "=" * 78)

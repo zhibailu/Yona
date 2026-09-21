@@ -138,8 +138,10 @@ class AgentLoop:
           (同 key 同 base_url;跨厂商/端点请走 engine 连接管理,
           见 server/app/llm_setup.py)。None = 实例默认(.env 已弃用,
           服务端默认 = UI 连接配置的模型)。
-        - max_rounds: 上下文窗口 —— 保留最近 N 个已结束轮(+当前轮),
+        - max_rounds: 上下文窗口 —— 保留最近 N 个**已结束的真人对白轮**(+当前轮),
           整轮裁剪绝不切散工具配对;0/None = 全量历史。
+          ⚠️ **独处轮(source="self",自走/补写)不占这个名额**(2026-09-21 用户拍板:
+          窗口是"对话窗口")—— 判定在 core/session_log.py 的 allowed_turns。
         - system_prompt: 本轮 SYSTEM 覆盖串(静态文本,替换 builder)。
           留空/None = 用构造时的旗舰 builder(人格/状态/世界照常注入)。
         """
