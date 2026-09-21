@@ -196,24 +196,39 @@ def test_sync_drops_a_message_the_user_deleted():
     engine.memory_sync(sid)
     assert engine.memory_cache(sid).counts()["total"] == 1
 
-    store.delete_messages_from(sid, from_id=1)   # 消息 id = 事件 seq;1 = 那句真人消息
+    # 从最早那条可见消息起截断。同样用现取的 id,别硬编(seq 从 1 起)。
+    first = store.get_messages(sid)[0]["id"]
+    store.delete_messages_from(sid, from_id=first)
     engine.memory_sync(sid)
     assert engine.memory_cache(sid).counts()["total"] == 0, "删掉的话还留在索引里"
 
 
 def test_editing_a_message_invalidates_its_vector():
-    """改正文 → 旧向量作废(否则按旧内容排新内容的名次)。"""
+    """改正文 → 旧向量作废(否则按旧内容排新内容的名次)。
+
+    ⚠️ 断言要落在**正文**上,不能只断言"欠了一条"。先前这里只看 `pending == 1`,
+       而"编辑后丢了半条"也满足它 —— 测试绿着,记忆已经残了(实测踩过)。
+    """
     store = _setup()
     sid = store.create_session("卡")
-    store.save_log(sid, _talk(sid, 1, "在吗", "在的。", time.time()))
+    store.save_log(sid, _talk(sid, 1, "今天吃什么", "晚上煮了碗面,卧了个蛋。", time.time()))
     engine.memory_sync(sid)
     cache = engine.memory_cache(sid)
+    cache.stop()                 # 停后台,免得它和下面的手工 fill 抢
     assert cache.fill_one(force=True)
     assert cache.counts()["pending"] == 0
 
-    assert store.update_message_content(sid, 2, "把书架上的旧杂志搬下来擦了灰。")
+    # 消息 id = 事件 seq。⚠️ 落盘回读后 seq 从 **1** 起(不是 0),
+    # 所以这里那句真人消息是 2。用 store.get_messages 现取比硬编更稳:
+    ids = [m["id"] for m in store.get_messages(sid) if m["role"] == "user"]
+    assert ids, "没找到那句真人消息"
+    assert store.update_message_content(sid, ids[0], "今天晚饭吃什么好呢")
     engine.memory_sync(sid)
     assert cache.counts()["pending"] == 1, "正文改了却没作废向量"
+
+    rows, _vecs = cache.load()
+    assert [r.text for r in rows] == ["今天晚饭吃什么好呢\n晚上煮了碗面,卧了个蛋。"], \
+        f"编辑后那一行残了: {[r.text for r in rows]}"
 
 
 def test_sync_is_idempotent_and_cheap():

@@ -88,6 +88,15 @@ def _turns(events: Iterable[Any]) -> list[dict]:
     编辑走的是同一条路:`update_message_content` = 遮蔽原文 + 追加修正消息,
     所以跳过原文之后,`_turns` 的"后者覆盖前者"自然取到修正后的正文。
 
+    ⚠️ **编辑/压缩留下的"替身消息"必须锚回原文的轮次**(2026-09-21 补)。
+       `update_message_content`(`server/store.py:350`)的形状是:
+       遮蔽原文 + 追加一条 `source="user-edit"` 且带 `replaces={start,end}` 的消息,
+       而那条追加消息**不带 turn**。投影层是靠 `replaces.start` 把它摆回原文位置的
+       (`core/session_log.py:431-434`)。
+       不锚回去的后果:**原文被遮蔽、替身因为没有 turn 被丢掉** → 那一半记忆
+       凭空消失,而且**看不出来**(行还在,只是少了一边)。
+       —— 只"过滤掉 replace 标记"是不够的:过滤只会让它继续消失。
+
     ⚠️ `assistant/message` 不带 source —— 靠**轮号**归属(与 core/session_log
     的 `self_turns` 同一个判据)。
     """
@@ -96,24 +105,46 @@ def _turns(events: Iterable[Any]) -> list[dict]:
     for e in evs:
         if e.type == "surface/shadow":
             hidden.update(range(e.data["start"], e.data["end"] + 1))
+    by_seq = {e.seq: e for e in evs}
+
+    # 只有"用户那半边"认这两种 source。
+    # ⏳ `compact`(压缩摘要)是**派生物**,不是她说的话 —— 它的记忆语义没拍板,
+    #    先不进记忆。compact 落地时这里要一起定(否则被压缩掉的那段会只剩她半边)。
+    _USER_SOURCES = ("user", "user-edit")
+
+    def _origin_of(e) -> tuple[int | None, float | None]:
+        """替身消息 → (原文的轮次, 原文的时刻);普通事件 → (自己的, None)。"""
+        rep = e.data.get("replaces")
+        if isinstance(rep, dict) and isinstance(rep.get("start"), int):
+            origin = by_seq.get(rep["start"])
+            if origin is not None:
+                t = origin.data.get("turn")
+                return (t if isinstance(t, int) else None), origin.time
+        return None, None
 
     acc: dict[int, dict] = {}
     for e in evs:
         if e.seq in hidden:
             continue
         t = e.data.get("turn")
+        at = e.time
+        if not isinstance(t, int):
+            t, origin_time = _origin_of(e)
+            # 时刻也跟着原文走:她编辑一条旧消息,不该让那条记忆的日期跳到"现在"
+            if origin_time is not None:
+                at = origin_time
         if not isinstance(t, int):
             continue
         d = acc.setdefault(t, {"turn": t, "source": "?", "user": None, "assistant": None})
         if e.type == "turn/start":
             d["source"] = e.data.get("source", "?")
         elif e.type == "user/message":
-            if e.data.get("source", "user") == "user":
-                d["user"] = {"text": _blocks_text(e.data.get("content")), "time": e.time}
+            if e.data.get("source", "user") in _USER_SOURCES:
+                d["user"] = {"text": _blocks_text(e.data.get("content")), "time": at}
         elif e.type == "assistant/message":
             txt = _blocks_text(e.data.get("content"))
             if txt.strip():
-                d["assistant"] = {"text": txt, "time": e.time}
+                d["assistant"] = {"text": txt, "time": at}
     return [acc[k] for k in sorted(acc)]
 
 

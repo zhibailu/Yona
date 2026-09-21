@@ -207,6 +207,38 @@ def test_shadow_only_hides_what_it_covers():
     assert rows[0].text == "第二轮\n回答二"
 
 
+def test_editing_a_message_reanchors_the_replacement_to_its_turn():
+    """编辑 = 遮蔽原文 + 追加一条**不带 turn** 的替身(`replaces` 锚回位置)。
+
+    只"过滤掉 replace 标记"是不够的 —— 过滤只会让那一半**继续消失**:
+    原文被遮蔽、替身因为没有 turn 被丢掉,行还在但少了一边,看不出来。
+    """
+    Ev._next[0] = 0
+    ev = _user_turn(1, "原始的话", "她的回答", 100.0, 101.0)      # seq 0..3
+    ev += [Ev("surface/shadow", {"start": 1, "end": 1, "reason": "user-edit"}, 200.0)]
+    ev += [Ev("user/message",
+              {"content": [{"type": "text", "text": "改正后的话"}],
+               "source": "user-edit", "replaces": {"start": 1, "end": 1}}, 300.0)]
+    rows = rows_from_events(ev)
+    assert len(rows) == 1, rows
+    assert rows[0].kind == "talk" and rows[0].role == "both", rows[0]
+    assert rows[0].text == "改正后的话\n她的回答", repr(rows[0].text)
+    # 时刻跟着**原文**走:编辑一条旧消息,不该让那条记忆的日期跳到"现在"
+    assert rows[0].time == 100.0, rows[0].time
+
+
+def test_editing_her_reply_keeps_the_other_half():
+    """对照组:改的是她那一半,用户那半边不许被牵连。"""
+    Ev._next[0] = 0
+    ev = _user_turn(1, "原始的话", "她原来的回答", 100.0, 101.0)
+    ev += [Ev("surface/shadow", {"start": 2, "end": 2, "reason": "user-edit"}, 200.0)]
+    ev += [Ev("assistant/message",
+              {"content": [{"type": "text", "text": "她改正后的回答"}],
+               "source": "user-edit", "replaces": {"start": 2, "end": 2}}, 300.0)]
+    rows = rows_from_events(ev)
+    assert [r.text for r in rows] == ["原始的话\n她改正后的回答"], rows
+
+
 def test_empty_index_returns_nothing():
     idx = MemoryIndex([], None)
     assert idx.search("随便") == []
@@ -222,6 +254,8 @@ def run_all():
         test_rows_ignore_non_turn_events,
         test_shadowed_messages_never_become_memory_rows,
         test_shadow_only_hides_what_it_covers,
+        test_editing_a_message_reanchors_the_replacement_to_its_turn,
+        test_editing_her_reply_keeps_the_other_half,
         test_bm25_prefers_exact_terms,
         test_scope_and_turn_are_routing_never_scoring,
         test_limit_floor_is_one,
