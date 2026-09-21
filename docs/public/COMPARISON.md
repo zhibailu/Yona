@@ -22,6 +22,7 @@
 | **fold = a view, not the log** | `fold_tool_traces` projection switch | the same family as agent context compression |
 | **per-step token-usage anchoring** | usage anchored to `(turn, step)` | dsh's same usage anchor |
 | **per-turn dynamic system assembly** | builder `(registry, source, log)` | agent prompt assembly |
+| **per-card memory recall** | `recall` tool over a sqlite index built from the log (top-level `cache/`) | dsh/Codex memory & retrieval primitives (retrieved as tool output, never as resident history) |
 
 > These are not "look-alike" coincidences — the design docs explicitly say "modeled on dsh session / `surface.ts` / Codex fork." It's a real, deliberate architectural alignment.
 

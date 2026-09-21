@@ -1,7 +1,9 @@
 # Yona 重写 · 设计决策与取舍(DESIGN)
 
 > 权威设计记录:每个决策的"为什么 + 取舍 + 证据",防止跑偏。
-> 地位:VISION(愿景/路线)上游之下、MAP(进度)的决策层。改动设计先改这里,再动代码。
+> 地位:VISION(愿景/路线)之下、**拍板正典 `docs/decisions/TIMELINE.md`** 的决策展开层(进度 → `docs/tasks/PROGRESS.md`,开放项 → `docs/tasks/OPEN.md`)。设计取舍写这里;新拍板写 TIMELINE,再回本文件同步。
+> ~~地位:VISION(愿景/路线)上游之下、MAP(进度)的决策层。改动设计先改这里,再动代码。~~
+> 【2026-09-21 23:30 更正】`MAP.md` 已不存在;而且原文「改动设计先改这里」与 `docs/decisions/README.md:6`「拍板正典 = TIMELINE.md」冲突,读者不知道新拍板该写哪 —— 真相:全库 grep `MAP.md` 只命中文档里的**历史引用**;仓库里没有该文件。现役是 `docs/decisions/TIMELINE.md`(拍板正典)+ `docs/tasks/PROGRESS.md` / `docs/tasks/OPEN.md`(进度 / 待办)。
 
 ---
 
@@ -46,7 +48,8 @@
   - 当前未结束轮**不折叠**(step 间要拿工具结果当原料)。
 - `Tool.retain_result=True`:该工具痕迹跨轮保留(保真)。语义 = Anthropic Context Editing 的 `ExcludeTools`(名单式),我们是工具自述(布尔),更内聚。
 - 折叠与"本轮白名单"是两个维度:白名单管"本轮能给什么",折叠管"历史痕迹给不给看"。子集 + 折叠开 = 模型彻底不知道旧工具。
-- **当前默认 False(忠实,业界主流),意图:旗舰(mvp/小夜子)开启折叠**。内核保留双视图,默认不破坏主流语义。
+- ~~**当前默认 False(忠实,业界主流),意图:旗舰(mvp/小夜子)开启折叠**~~ **内核默认 False(忠实,业界主流);旗舰已开 ✅(2026-09-19,`server/app/engine.py:924` 传 `fold_tool_traces=True`)**。内核保留双视图,默认不破坏主流语义。
+> 【2026-09-21 23:30 更正】原文读起来像旗舰还没生效 —— 真相:旗舰**已经真开着了**:`server/app/engine.py:924` 传 `fold_tool_traces=True`(注释写着「折叠视图开(**2026-09-19 用户拍板,原为 False**)」);`core/loop.py:53` 内核默认仍是 `False`;本文件 §7「折叠默认值」那条自己已写「旗舰默认 True」。
 - 参照:dsh compaction = 整段摘要替换 + 结果裁剪,不删配对(靠 tool-pairing 平衡切点);Anthropic = 服务端声明式自动管理。我们是客户端纯函数视图,更细、零成本、日志兜底。
 - **代价(已知)**:折叠后模型只能依赖"说出口的话 + 状态段",翻不了工具原文;需要旧数据就现调(retain_result 的工具例外)。
 
@@ -67,7 +70,8 @@
 
 ## 7. 已知待定项
 
-- 折叠默认值:内核默认 False,旗舰默认 True——是否把内核默认也翻成 True,待 P5 旗舰定型后定。
+- 折叠默认值:内核默认 False,旗舰默认 True——是否把内核默认也翻成 True,待 ~~P5 旗舰定型~~ **旗舰形态定型**(见 `docs/tasks/OPEN.md`)后定。
+> 【2026-09-21 23:30 更正】原文「待 P5 旗舰定型后定」的到期条件永远悬空:本项目里没有 P5(VISION 的技术路线只到 P4) —— 真相:`docs/decisions/VISION.md` 的技术路线只列 P1–P4;全库 grep `P5` 只有本行这一处。
 - 坏 JSON 参数解析失败:当前静默回退 `{}`、`is_error=False`——是否标错,待定。
 
 ---
@@ -231,7 +235,8 @@ K 已拍板固定 = **1.5**(DEFAULT_K,不随长度)。实际期望 = K × ∫sha
   不是改配置;UI 模型发现假定端点兼容 chat/completions 的 /models,
   responses-only 端点不适用。
 
-> STRUCTURE §2 取舍表与 MAP 开放项已挂本条;参数与模型装配见 params.py。
+> STRUCTURE §2 取舍表与 ~~MAP 开放项~~ `docs/tasks/OPEN.md` 的开放项已挂本条;参数与模型装配见 params.py。
+> 【2026-09-21 23:30 更正】原文写的 `MAP 开放项` 指向已不存在的 `MAP.md` —— 真相:仓库无 `MAP.md`;开放项权威 = `docs/tasks/OPEN.md:3`。
 
 ## 12. 会话快照整合(2026-09 任务6,用户拍板"塞进档案袋")
 

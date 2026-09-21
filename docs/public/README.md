@@ -1,3 +1,5 @@
+> 【2026-09-21 23:25 核准】
+
 # Yona · Public Docs
 
 > Docs for users and contributors. **Internal dev decisions / pitfalls live in the other `docs/` subfolders** (`decisions/`, `tasks/`, `pitfalls/`, …); this `docs/public/` layer is separate and clean to read outward.

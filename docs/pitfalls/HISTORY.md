@@ -78,13 +78,24 @@
 一个对象只该服务**一个东西**。`log.time_cursor` 挂在 `SessionLog` 实例上是**对的**;
 `_backfill_clock` 挂在模块全局上是**错的** —— 同一个信息,一份对一个错。
 
+> 【2026-09-21 23:20 补】2026-09-17 同日的后续拍板:四来源改为**统一 turn 队列**(`engine._submit_turn`,单 worker `yona-turn`),`_lock` 降为第二道保险。上面"加载 → 改 → 存盘是一个事务"的规则**不变**,只是事务边界现在落在队列项里。
+
 ## 五、STRUCTURE 过时项(2026-09 文档重排时清点)
 
 docs/STRUCTURE.md 是从早期写的"结构身躯",正文有若干已过时事实,重排时不再逐句改
 (避免大搬动再错),在此登记为**已知陈旧**,别当真值用:
-- "项目尚未 git init" —— 实际早有 git + 长历史。
+- (已不适用) "项目尚未 git init" —— 该句在 2026-09 文档重排时已从 STRUCTURE 删除。
 - 若干 `_life` 描述(匿名全局生活流)—— 已改**每卡一套 life**(会话即角色卡)。
 - 测试文件数(9/11/12 各处不一)—— 以实际跑 `py test/test_*.py` 为准。
 - main.py 行数 / 24 端点等数字 —— 以代码为准。
+- MAP.md 与根文档路径(STRUCTURE §1 树)—— 实际已是 docs/ 分层,MAP.md 全仓不存在;
+- core 目录树缺 memory.py / memory_cache.py / embed.py / subrun.py,且行数全错;
+- "RAG 暂无向量记忆" —— 2026-09-21 recall 已毕业进产品;
+- "/presets 返回 []" —— config.py 已实现 CRUD;
+- "兼容再导出" —— facade 已在 2026-09 移除;
+- "hot 分支已废弃" —— YONA_GATE_HOT 仍在(演示模式),FAQ 那条是对的。
+
+> 【2026-09-21 23:20 核准并补齐】本节清单此前缺上面 6 类过时项,已补齐;`docs/STRUCTURE.md` 全文搜 `git` 只命中 :39 / :124 / :167 / :170(更正前实测;本轮插入标注块后行号已漂) —— 本节第 1 条"项目尚未 git init"引用的句子在 2026-09 文档重排时已被删除,该条目曾悬空,现已标为不适用。
+
 **当前真值**:`docs/decisions/TIMELINE.md`(拍板)、`server/params.py`(✅/⏳ 参数)、
 每目录 README、代码。

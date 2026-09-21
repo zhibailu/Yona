@@ -152,11 +152,16 @@ tools=ToolRegistry([]), self_note=note)`。她只有一个大脑 —— 差异�
 ```
 start()(lifespan 调一次)
  └─ _maybe_backfill_life()                    # 只在这一处被调用
-     └─ 后台线程 "yona-backfill" ─► **立刻抢 _lock**,以下**全在锁内**:
-         ├─ life_session_id()                 # = store.life_target_session_id()
-         │                                    #   「最近激活的卡」= updated_at 最新
-         │                                    #   且日志里有真人 user/message 的卡
-         │                                    #   (没聊过任何卡 → Yona 旗舰兜底)
+     └─ 后台线程 "yona-backfill" ─► life_backfill_order() 逐卡入队(下面每一项由 turn worker 持 _lock 跑 _card_job):
+         ├─ order = _store.life_backfill_order()  # store.py:214-235:全部
+         │                                        # _has_user_talk 的卡、updated_at
+         │                                        # 降序 —— 没有「旗舰兜底」这条
+         ├─ order 为空 → 打印「没有聊过的卡,跳过」,直接返回
+         ├─ 逐卡 _submit_turn(lambda s=sid: _card_job(s),
+         │                    priority=_QUEUE_SELF, sid=sid)
+         │   # 一张卡 = 一个队列项;_lock 由 turn worker 在 engine.py:359 拿,
+         │   # 线程自己不抢
+         └─ _card_job(sid)(每卡一项;以下 ├─ 即 _card_job 内部步骤):
          ├─ card_log = load_log(sid)
          ├─ last_active = 该卡日志尾事件时间
          ├─ _wake_decision(last_active, now)  # 纯函数:首启不补 / gap<30min 正常重启
@@ -171,6 +176,15 @@ start()(lifespan 调一次)
              └─ finally: clear_time_cursor(); _backfill_clock["ts"] = 0.0
          收尾: save_log(sid, card_log) → _life_gate.mark_self()(进入心跳冷却,节奏衔接)
 ```
+
+> 【2026-09-21 23:10 更正】本伪代码当时写的是「线程自己**立刻抢 _lock**、只补
+> `life_session_id()` 那一张卡、没聊过任何卡走 Yona 旗舰兜底」—— 锁的持有者写错了,
+> 目标卡也写错了,「旗舰兜底」这条路径根本不存在。 —— 真相:`_lock` 由 turn worker 在
+> `server/app/engine.py:359` 拿,线程自己不抢;启动时按 `life_backfill_order()`
+> (`server/store.py:214-235`:全部 `_has_user_talk` 的卡、`updated_at` 降序,**没有旗舰
+> 兜底**)**逐卡** `_submit_turn(lambda s=sid: _card_job(s), priority=_QUEUE_SELF, sid=sid)`
+> (`server/app/engine.py:1137-1162`);`life_session_id()`
+> (`server/app/engine.py:1039-1046`)现在只服务自走/心跳/脉冲的目标卡。
 
 **2026-09-17 方案 A**:锁外**只剩"起线程"这一件事** —— 从"读日志尾"开始
 (那是决策依据)到"跑完 N 轮",一气呵成在同一把锁里。旧的
@@ -223,12 +237,16 @@ sample() 逐格点:
 
 ### 5.1 情境文案(2026-09 起:补写轮复用 SELF_SITUATION)
 
-曾单列 `BACKFILL_PERSONA`(旧 BACKFILL_SITUATION,"当下视角、刚做完正在做、
-随手记一笔、别回溯…")—— **2026-09 用户拍板删 BACKFILL_SITUATION**:补写轮 =
+曾单列 ~~`BACKFILL_PERSONA`(旧 BACKFILL_SITUATION,"当下视角、刚做完正在做、随手记一笔、别回溯…")~~ `BACKFILL_SITUATION`(独处轮的**情境段**;更早的人格里还有一个 `BACKFILL_PERSONA`,均已删)
+—— **2026-09 用户拍板删 BACKFILL_SITUATION**:补写轮 =
 自走轮的离线回放,复用同一份 SELF_SITUATION("现在是你自己的生活时间,参考
 时间线,生成符合生活现象的事件",见 character/personas.py)。想改"独处轮怎么
 说"只改这一处。下为历史 BACKFILL_SITUATION 原文存档(内容已并入语境由
 SELF_SITUATION + 动态 note 覆盖,不再单独生效):
+
+> 【2026-09-21 23:10 更正】原句「曾单列 `BACKFILL_PERSONA`(旧 BACKFILL_SITUATION,…)」
+> 把**人格常量**与**情境常量**混在一个名字里 —— 真相:`character/personas.py` 现只有
+> `PERSONA`(:34)、`CHAT_SITUATION`(:39)、`SELF_SITUATION`(:47),没有任何 `BACKFILL_*`。
 
 ```
 "此刻大约是上方的 [当前时间],你一个人,刚做完或正在做一件具体的事。
@@ -241,12 +259,23 @@ SELF_SITUATION + 动态 note 覆盖,不再单独生效):
 ### 5.2 self_note(每事件,只当轮可见)
 
 ```
-此刻没有人在跟你说话,你一个人过着平常的一天。
-这段时间(约 X)里你只做了**一件事**——就是现在刚做完/正在做的这一件。
-时间由系统给你,别自己报时间;不要写别的时间段的事。
-[gap_note]
-gap_note(i>0): 距上一件事做完已过约 X(>60s) / 你上一件事刚做完不久。
+[引擎动态拼接的当轮数据 —— server/app/engine.py:1112-1116,不是内容层常量]
+f"这段时间(约 {_human_gap(e.budget_min*60)})里你只做了**一件事**——就是现在刚做完/正在做的这一件。{gap_note}"
+
+gap_note(server/app/engine.py:1102-1108):
+  i == 0        → ""
+  空档 > 60s    → "距离你上一件事做完已经过了约 X(中间的时间平平淡淡,没发生值得记的事)。"
+  否则          → "你上一件事刚做完不久。"
 ```
+
+> 【2026-09-21 23:10 更正】原块第 1 句「此刻没有人在跟你说话,你一个人过着平常的一天。」
+> 与第 3 句「时间由系统给你,别自己报时间;不要写别的时间段的事。」**整个仓库里都不存在**
+> (紧接其后的注说「静态部分已在 SELF_SITUATION」,与这两句自相矛盾)—— 真相:note 是
+> **引擎动态拼接的当轮数据**(`server/app/engine.py:1112-1116`),不是内容层常量;真值 =
+> `f"这段时间(约 {_human_gap(e.budget_min*60)})里你只做了**一件事**——就是现在刚做完/正在做的这一件。{gap_note}"`;
+> `gap_note` 见 `server/app/engine.py:1102-1108`(两种情况:空档 > 60s → 「距离你上一件事
+> 做完已经过了约 X(中间的时间平平淡淡,没发生值得记的事)。」;否则 → 「你上一件事刚做完
+> 不久。」);`character/personas.py:47-49` 的 `SELF_SITUATION` 只有一句。
 
 > 注:self_note 是**动态数据**(预算上限 + 间隔),保留在引擎/lab 组 note 处;
 > 静态"独处轮怎么说"已在 SELF_SITUATION,不在这里重复(2026-09 归位)。
@@ -267,12 +296,24 @@ gap_note(i>0): 距上一件事做完已过约 X(>60s) / 你上一件事刚做完
 | 工具 | 用法 | 内容 |
 |---|---|---|
 | test_backfill.py | `py test\test_backfill.py` | 14 断言:触发判定×3、shape 归一化、事件有序/不重叠/区间内、budget 范围、均值≈K∫shape、K 正交、睡眠窗零事件、事件不越过 23:30、seed 可复现、时间依赖、time_cursor×2 |
-| backfill_probe.py | `dist` / `inv` / `table` / `real <间隔> [seed列表]` | 分布(60 seed)、不变量扫描(500 seed×7 间隔)、明细表、**真模型多样本**(real 13h 自动挑 1/2/3 件 seed;每 seed 独立 SessionLog) |
+| backfill_probe.py | `dist` / `inv` / `table` / `real <间隔> [seed列表]` | 分布(60 seed)、不变量扫描(500 seed×7 间隔)、明细表、**真模型多样本**(real 13h 自动挑 1/2/3 件 seed;每 seed 独立 SessionLog)⚠️ **已失效**(2026-09 情境合一后仍引用 `sm.BACKFILL_SITUATION` / `sm.PERSONA`,未修) |
 | backfill_scan.py | `py test\backfill_scan.py [间隔] [seed数]` | 丰富度扫描:形状分组/代表样本/预算分布 |
 | k_compare.py | `py test\k_compare.py [seeds]` | K 旋钮对比表(理论/实测均值/0件率/分布/均值÷K 验证正交) |
 | rate_curve.py | `py test\rate_curve.py` | ASCII shape 曲线 + K×∫ 窗口期望 |
-| rate_curve_plot.py | `py test\rate_curve_plot.py` | 三张子图 PNG(`test/rate_curve.png`):shape / K 正交 / 判定轨迹示例 |
+| rate_curve_plot.py | `py test\rate_curve_plot.py` | 三张子图 PNG(~~`test/rate_curve.png`~~ `assets/design/rate_curve.png`):shape / K 正交 / 判定轨迹示例 |
 | sse_edu.py / busy_probe.py | 各自 runner | SSE 教学 / 忙态探针(保留) |
+
+> 【2026-09-21 23:10 标】`backfill_probe.py` 的 `real` 档 ⚠️ **已失效** —— 它引用的东西
+> 不存在:`test/backfill_probe.py:199-204` 用 `sm.PERSONA` / `sm.BACKFILL_SITUATION`
+> (`sm` = `server.app.engine`,见该文件第 17 行),而 `server/app/engine.py` 没有模块级
+> `PERSONA`(只有 `personas_mod.PERSONA`,`server/app/engine.py:870/874/883`),
+> `character/personas.py` 也没有 `BACKFILL_SITUATION`;`sm.SELF_SITUATION` 同样不存在。
+> (`dist` / `inv` / `table` 三档不变。)
+>
+> 【2026-09-21 23:10 更正】`rate_curve_plot.py` 行把输出路径写错了 —— 真相:
+> `test/rate_curve_plot.py:49` `OUT = … / "assets" / "design" / "rate_curve.png"`;
+> 仓库里只有 `assets/design/rate_curve.png`,`test/rate_curve.png` 不存在
+> (三张子图是真的,`:182`)。
 
 间隔定义(probe/scan 共用):`2h` 12-14、`4h` 13-17、`6h` 9-15、
 `13h` **11:35→次日 00:30(对齐用户真实 case)**、`24h` 6:00→次日 6:00、
@@ -291,6 +332,7 @@ gap_note(i>0): 距上一件事做完已过约 X(>60s) / 你上一件事刚做完
 - 实测均值 ≈ 理论 K×∫shape(差 0.1-0.2,抽样误差内;分钟离散 + 5min 下限微偏)。
 - 真模型样例(real 13h,seed1=1件 19:58 剪薄荷 / seed0=2件 12:15 搬薄荷、
   19:36 晾衬衫 / seed5=3件 15:13 擦绿萝、16:23 收牛仔裤、19:57 叠衣收柜)。
+  ⚠️ **样本采集于情境合一之前**(2026-09-21 23:10 注)。
 
 ---
 
@@ -333,7 +375,12 @@ gap_note(i>0): 距上一件事做完已过约 X(>60s) / 你上一件事刚做完
 >
 > - **已落地**:`engine.py::_maybe_backfill_life` 整段纳入 `_lock`;
 >   `BACKFILL_START_DELAY_SEC` 已删(理由见 §9.3)。
-> - **仍未落**:① 多卡触发点(§9.6)、③ clock 地基(§9.5)—— 都还 ⏳。
+> - **仍未落**:~~① 多卡触发点(§9.6)、③ clock 地基(§9.5)—— 都还 ⏳。~~
+>   ③ clock 地基(§9.5)—— 仍 ⏳;**① 多卡触发点已落**(见 §9.6 / §9.8)。
+>
+>   > 【2026-09-21 23:10 更正】原句把 ① 也写成 ⏳,与本文件 §9.8 表格「遍历所有有历史的卡,
+>   > 一张卡一个队列项 | ✅ **已落**」互相打架 —— 真相:`server/store.py:214` 有
+>   > `life_backfill_order()`、`server/app/engine.py:1142-1153` 已逐卡入队,① **已落**。
 > - **一处修正**(见 §9.4):先前把"补写窗口重算"报成独立问题,**错了** ——
 >   它只是「锁的位置不对」的一个表象;A 落地后它自动消失。
 
@@ -341,9 +388,14 @@ gap_note(i>0): 距上一件事做完已过约 X(>60s) / 你上一件事刚做完
 
 | # | 缺口 | 现状(代码事实) |
 |---|---|---|
-| ① | 「其它卡等**下次被激活**再补」没实现 | `_maybe_backfill_life()` 全项目只被 `start()` 调一次(`engine.py`),只检查 `life_session_id()` 那一张卡。⚠️ 该承诺**在逻辑上就落不了地**(不是"没写"),见 §9.6 |
+| ① | 「其它卡等**下次被激活**再补」没实现 | ~~`_maybe_backfill_life()` 全项目只被 `start()` 调一次(`engine.py`),只检查 `life_session_id()` 那一张卡。~~ **① 已落(2026-09-17 取方案乙)**:`_maybe_backfill_life()` 仍只在 `start()` 被调一次(`engine.py:1278`),但内部按 `store.life_backfill_order()` 遍历**所有有历史的卡**。⚠️ 该承诺**在逻辑上就落不了地**(不是"没写"),见 §9.6 |
 | ② | 补写事件排到用户消息**之后** | **旧代码**:`sleep(BACKFILL_START_DELAY_SEC)` 在锁外 → 那 5 秒里用户消息先落盘。**已随方案 A 修掉**(见 §9.3)。⚠️ 它不是"窗口重算"问题 —— 见 §9.4 的修正 |
 | ③ | `_backfill_clock` 是**进程全局** | 一个副本服务多张卡。多卡并发补写会互相改写世界时间 |
+
+> 【2026-09-21 23:10 更正】上表 ① 行「只检查 `life_session_id()` 那一张卡」已不是事实
+> (另一半「仍只被 `start()` 调一次」是对的)—— 真相:`server/app/engine.py:1142-1153`
+> 遍历所有卡,顺序来自 `server/store.py:214` 的 `life_backfill_order()`;`start()` 那一处
+> 调用在 `server/app/engine.py:1278`。
 
 ### 9.2 根因一句话
 
@@ -458,7 +510,11 @@ world_now=lambda: time.localtime(_backfill_clock["ts"])
 ```
 
 它在 `_build_engine` 时造好,**拿不到 log、也不知道自己在服务哪张卡**。
-另外两个读点(`_now(log)` 与 `sys_by_source`)**手里都有 log**。
+另外两个读点(~~`_now(log)`~~ `_live_epoch(log)` 与 `sys_by_source`)**手里都有 log**。
+
+> 【2026-09-21 23:10 更正】`_now` 这个标识符在 `server/app/engine.py` 里全文件不存在 ——
+> 真相:对应读点是 `_live_epoch(log)`(`server/app/engine.py:838-843`)与 `sys_by_source`
+> (`server/app/engine.py:898`)。
 
 **改法**:把世界时间当**参数**传进 composer(三参 builder 本来就收到 log),
 或让 `world_now` 读 `log.time_cursor`;产品路径两者本就同时设成同一个值
@@ -467,7 +523,10 @@ world_now=lambda: time.localtime(_backfill_clock["ts"])
 > 判据(记进 `docs/pitfalls/HISTORY.md §四`):**一个变量的值如果是「本卡的」,
 > 它就不该住在模块全局。**
 
-### 9.6 ⏳ 多卡触发点(①):启动时该补几张卡
+### 9.6 ✅ 多卡触发点(①):启动时遍历所有有历史的卡(2026-09-17 拍板 + 已落)
+
+> 【2026-09-21 23:10 更正】原标题写着 **⏳**、问「该补几张卡」,已过时 —— 真相:本节
+> 正文早已是「✅ 已拍(2026-09-17):取**乙**」,§9.8 也标着「✅ **已落**」。
 
 > ⚠️ **撤回一个我自己搞错的方向。** 本节先前写的是"在聊天轮之前加触发点" ——
 > 那把补写**绑到了用户消息**上,与"补写是程序自主行为"根本矛盾。用户点破后撤回。
@@ -507,10 +566,15 @@ world_now=lambda: time.localtime(_backfill_clock["ts"])
 | 补几张 | **所有**有真人 `user/message` 的卡(`_wake_decision` 自带"无历史不补") |
 | 顺序 | **离线间隔升序**(= `updated_at` 降序)→ **当前卡天然排第一** |
 | 粒度 | 一张卡 = **一个队列项**(见 §9.3) |
-| 队列 | `_submit_turn(..., priority=_QUEUE_SELF)`;user 请求永远插在 self 前面 |
+| 队列 | `_submit_turn(..., priority=_QUEUE_SELF)`;~~user 请求永远插在 self 前面~~ user 请求按**目标卡**定优先级:那张卡还没补完 → 排在它的补写后面;已补完 → 插到所有未解绑补写前面(见 §3.2 与 `engine.user_turn_priority`) |
 
-**效果**:开机后你等的是**当前卡**那一段,不是全部;之后你一发消息就插队到
-所有剩余的补写项前面 —— "已经解绑的会话来了 user 请求,其余靠后被插队"。
+**效果**:开机后你等的是**当前卡**那一段,不是全部;之后**已解绑**的卡一来消息
+就插到剩余补写项前面 —— "已经解绑的会话来了 user 请求,其余靠后被插队"。
+
+> 【2026-09-21 23:10 更正】表格原写「user 请求**永远**插在 self 前面」,与代码打架 ——
+> 真相:`server/app/engine.py:428-431` `user_turn_priority(sid)` 返回
+> `_QUEUE_SELF if sid in _pending_backfill else _QUEUE_USER`,`server/app/api/chat.py:137-139`
+> 用的就是它;本文件 §3.2 也写着「期间发给它的 user 请求排在它的补写**后面**」。
 
 > ⚠️ 一个仍待补的实现细节(不影响本拍板):窗口**终点**用"此刻"即可 ——
 > 因为整张卡是不可分割的队列项,补写跑的时候没有别人能往这张卡的日志里写。
