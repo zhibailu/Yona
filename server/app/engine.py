@@ -922,8 +922,8 @@ def _build_engine(cfg: dict | None = None) -> None:
         # (prompt_lab/check_transient.py,0 花费可复跑)。
         # 折叠**只改投影,日志原文一个字不动**(core/session_log.py:274)。
         fold_tool_traces=True,
-        # 独处生活事件进上下文的前缀(内容层文案;见 personas.LIFE_EVENT_PREFIX)
-        life_event_prefix=personas_mod.LIFE_EVENT_PREFIX,
+        # ⚠️ 这里**没有** life_event_prefix(2026-09-21 拆除):生活事件整条不进投影,
+        # 取用路径只剩 `recall` 工具。判定见 core/session_log.derive_messages。
         # 真人消息进上下文的时间戳(内容层模板;见 personas.USER_TIME_PREFIX)。
         # 2026-09-17:历史里没有时间轴,她算不出"距上一条多久" —— 两条相隔
         # 69 分钟的对话被她读成了连续的("刚不是说了嘛,你连着问两遍")。

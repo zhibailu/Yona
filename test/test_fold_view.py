@@ -167,7 +167,12 @@ def test_fold_leaves_log_untouched():
 
 
 def test_self_placeholder_skipped_in_closed_turns():
-    """自走轮占位 user 串:已结束轮不进历史;当前轮保留(触发点)。"""
+    """自走轮占位 user 串:已结束轮不进历史;当前轮保留(触发点)。
+
+    ⚠️ 2026-09-21:同一轮的 **assistant 生活事件也不进了**(用户拍板"往事只走
+       recall 工具")—— 所以下面 `roles` 只剩当前轮那条占位 user。
+       两件事同源:已结束的独处轮**整轮**都不该出现在模型上下文的角色槽位里。
+    """
     log = SessionLog("t")
     # turn1 = 自走轮,完整结束
     log.append("turn/start", turn=1, source="self")
@@ -184,10 +189,36 @@ def test_self_placeholder_skipped_in_closed_turns():
     msgs = log.derive_messages()
     roles = [m["role"] for m in msgs]
     texts = [m["content"][0]["text"] for m in msgs if m["role"] == "user"]
-    # 只有当前轮(turn2)的占位 user;turn1 的占位被跳过
-    assert roles == ["assistant", "user"], roles
-    assert "占位串(当前轮)" in texts[0]
-    assert "她独处的生活事件" in msgs[0]["content"][0]["text"]
+    # 已结束的自走轮**整轮消失**:占位被跳过,生活事件也不进 assistant 槽位
+    assert roles == ["user"], roles
+    assert texts == ["【自动轮】占位串(当前轮)"], texts
+    assert not any("她独处的生活事件" in str(m) for m in msgs), "生活事件漏进上下文了"
+
+
+def test_ended_self_turn_is_gone_but_the_running_one_keeps_its_steps():
+    """⚠️ 只跳**已结束**的独处轮。当前轮必须留着 —— 同一轮 step 之间还要拿
+    tool-call / tool/result 当原料,跳掉会切出**孤儿 tool 消息**(喂给模型不合法)。
+    """
+    log = SessionLog("t")
+    log.append("turn/start", turn=1, source="self")
+    log.append("user/message", turn=1, source="self",
+               content=[{"type": "text", "text": "占位(当前轮)"}])
+    log.append("assistant/message", turn=1, step=1, content=[
+        {"type": "text", "text": "我先看一眼"},
+        {"type": "tool-call", "id": "c1", "name": "recall",
+         "arguments": "{}"},
+    ])
+    log.append("tool/result", turn=1, step=1, tool_call_id="c1",
+               content=[{"type": "text", "text": "结果"}])
+    log.append("assistant/message", turn=1, step=2,
+               content=[{"type": "text", "text": "第二段"}])
+
+    msgs = log.derive_messages()
+    roles = [m["role"] for m in msgs]
+    assert roles == ["assistant", "tool", "assistant"], roles
+    # 每个 tool 消息前面必须有一条带 tool-call 的 assistant(否则是孤儿)
+    assert any(b.get("type") == "tool-call"
+               for b in msgs[0]["content"] if isinstance(b, dict)), msgs[0]
 
 
 def test_real_user_messages_never_skipped():

@@ -361,24 +361,27 @@ def test_user_time_prefix_marks_human_messages_only():
     被抄进正文的(日志里已有 2 条 assistant 正文自带标记)。再给 assistant
     侧加一个可抄模板 = 重蹈覆辙。她的回复与真人消息同轮、时刻几乎相同,
     标了真人就等于把她的也夹住了。
+
+    ⚠️ 2026-09-21:那条"生活事件标记"的注入侧已拆 —— 已结束的独处轮**整轮**
+       不进上下文(用户拍板"往事只走 recall 工具")。所以这里不再出现带前缀的
+       assistant;仍要钉住的是**assistant 侧一个可抄模板都没有**。
     """
     log = SessionLog("t")
     _append_completed_self_turn(log, 1, "星期天晚上,不想动。", at=T0)
     _append_human_turn(log, 2, at=T0 + 4200)
 
-    msgs = log.derive_messages(life_event_prefix="〔生活事件·{time}〕",
-                               user_time_prefix="[{time}]")
+    msgs = log.derive_messages(user_time_prefix="[{time}]")
 
     users = [m for m in msgs if m["role"] == "user"]
     assert len(users) == 1, f"自走占位串不该进历史: {users}"
     assert users[0]["content"][0]["text"] == f"[{_stamp(T0 + 4200)}]\n问2", users[0]
 
-    # assistant 侧:生活事件带**前缀**标记(原样),真人轮的回复一个字不加
     assistants = [m for m in msgs if m["role"] == "assistant"]
-    assert assistants[0]["content"][0]["text"].startswith("〔生活事件·"), assistants[0]
-    assert assistants[1]["content"][0]["text"] == "答2", (
-        f"assistant 被标了时间戳 —— 那正是会被抄进正文的形式: {assistants[1]}"
-    )
+    assert [m["content"][0]["text"] for m in assistants] == ["答2"], assistants
+    for m in assistants:
+        text = m["content"][0]["text"]
+        assert not text.startswith("["), f"assistant 被标了时间戳 —— 那正是会被抄进正文的形式: {m}"
+    assert not any("星期天晚上" in str(m) for m in msgs), "独处轮的生活事件漏进上下文了"
 
 
 def test_user_time_prefix_placeholder_and_zero_semantics():
@@ -453,75 +456,87 @@ def test_agent_loop_passes_user_time_prefix_down():
     assert [m for m in msgs2 if m["role"] == "user"][0]["content"][0]["text"] == "问1"
 
 
-def test_life_event_prefix_marks_ended_self_turns_only():
-    """自走轮生活事件进上下文:已结束自走轮的 assistant 前拼「前缀 时间戳」行,
-    真人轮的消息不加(2026-09:避免孤立 assistant 冒充对用户说的话)。"""
+def test_ended_self_turn_never_reaches_the_context():
+    """**已结束的独处轮整轮不进上下文**(2026-09-21 用户拍板)。
+
+    老行为是"进,但前面拼一行前缀 + 时间戳";前缀是**补丁** —— 补的是
+    "她一个人做的事"挤在 `assistant` 槽位(role 过载)这个结构缺陷,而模型会
+    照抄那行前缀。现在从根上去掉:取用路径只剩 `recall` 工具。
+    """
     log = SessionLog("t")
-    _append_completed_self_turn(
-        log, 1, "星期天晚上,不想动。", at=1_700_000_000.0)
+    _append_completed_self_turn(log, 1, "星期天晚上,不想动。", at=1_700_000_000.0)
     _append_completed_turn(log, 2)  # 真人轮:问2/答2
 
-    # 不带前缀 = 原行为(生活事件裸文本保留)
-    bare = [m for m in log.derive_messages() if m["role"] == "assistant"]
-    assert bare[0]["content"][0]["text"] == "星期天晚上,不想动。"
-
-    msgs = log.derive_messages(life_event_prefix="〔生活事件〕")
-    self_txt = msgs[0]["content"][0]["text"]
-    # 前缀 + 空格 + 时间戳(%m-%d %H:%M)+ 换行 + 正文
-    import re
-    assert re.match(r"^〔生活事件〕 \d{2}-\d{2} \d{2}:\d{2}\n", self_txt), self_txt
-    assert self_txt.endswith("星期天晚上,不想动。"), self_txt
-    # 真人轮 assistant 不被加前缀
-    user_turn_txt = msgs[2]["content"][0]["text"]
-    assert user_turn_txt == "答2", user_turn_txt
+    msgs = log.derive_messages()
+    assert [m["role"] for m in msgs] == ["user", "assistant"], msgs
+    assert msgs[1]["content"][0]["text"] == "答2", msgs[1]
+    assert not any("星期天晚上" in str(m) for m in msgs), "独处轮的生活事件漏进上下文了"
+    # 自走轮的占位 user 也不进(已结束轮)
+    assert all(m["content"][0]["text"] != "占位" for m in msgs), msgs
 
 
-def test_life_event_prefix_time_placeholder_and_zero_semantics():
-    """{time} 占位换成时间;空前缀(默认)= 完全不改。"""
+def test_running_self_turn_still_sees_its_own_earlier_steps():
+    """⚠️ 只跳**已结束**轮:当前轮的 assistant 必须留着。
+
+    同一轮里 step 之间要拿 tool-call / tool/result 当原料;跳掉会切出
+    **孤儿 tool 消息**,喂给模型不合法。
+    """
+    log = SessionLog("t")
+    log.append("turn/start", turn=1, source="self")
+    log.append("user/message", turn=1, source="self",
+               content=[{"type": "text", "text": "占位(当前轮)"}])
+    log.append("assistant/message", turn=1, step=1, content=[
+        {"type": "text", "text": "我先看一眼"},
+        {"type": "tool-call", "id": "c1", "name": "recall", "arguments": "{}"},
+    ])
+    log.append("tool/result", turn=1, step=1, tool_call_id="c1",
+               content=[{"type": "text", "text": "结果"}])
+    log.append("assistant/message", turn=1, step=2,
+               content=[{"type": "text", "text": "第二段"}])
+
+    msgs = log.derive_messages()
+    assert [m["role"] for m in msgs] == ["user", "assistant", "tool", "assistant"], msgs
+    assert any(b.get("type") == "tool-call"
+               for b in msgs[1]["content"] if isinstance(b, dict)), msgs[1]
+
+
+def test_derive_messages_has_no_life_event_injection_knob_left():
+    """注入侧**拆干净**了:那个参数不许再存在(留个死旋钮比删掉更坏)。
+
+    ⚠️ 但**读侧**的 `LIFE_EVENT_PREFIX` 模板必须留着 —— 日志里那 2 条脏字是
+    唯一证据,`strip_copied_prefix` 靠它识别(见下一个用例)。
+    """
     log = SessionLog("t")
     _append_completed_self_turn(log, 1, "晚风凉凉的。", at=1_700_000_000.0)
-    _append_completed_self_turn(log, 2, "想睡了。", at=1_700_010_000.0)
+    try:
+        log.derive_messages(life_event_prefix="〔生活事件〕")
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("life_event_prefix 参数还在 —— 注入侧没拆干净")
+    assert P.LIFE_EVENT_PREFIX, "读侧模板被误删了"
+    assert log.derive_messages() == log.derive_messages()
 
-    # {time} 占位:直接替换,不带多余空格
-    msgs = log.derive_messages(life_event_prefix="〔生活事件·{time}〕")
-    first = msgs[0]["content"][0]["text"].split("\n")[0]
-    assert first.startswith("〔生活事件·"), first
-    assert first.endswith("〕"), first
-    # 空前缀 = 不改(回归保护)
-    assert log.derive_messages() == log.derive_messages(life_event_prefix="")
 
-
-def test_life_event_prefix_not_doubled_when_she_copied_it():
-    """**投影必须幂等**:正文里已经有那行标记时,不许再叠一层。
+def test_copied_prefix_is_still_stripped_on_the_read_side():
+    """**投影幂等那道读侧补丁仍要有**,只是换了入口。
 
     背景(2026-09-21 实测的脏数据):模型会**模仿自己的输出**,把投影加的那行
-    「前缀 + 时间戳」当正文写了下来 —— 真卡片里有 2 条。不剥的话下一次投影
-    拼出**两重**标记,而且内层那个时间戳是**过期的**
-    (轮 14:外层 09-12 07:18、内层 09-11 20:41)。
-    根因是 role 过载(见 docs/decisions/TIMELINE.md「三、方向探索」);
-    这里测的是那道读侧补丁。
+    「前缀 + 时间戳」当正文写了下来 —— 真卡片里有 2 条。现在注入侧拆了,
+    **不会再新增**;但日志里那 2 条**永远留在那儿**(日志即真相),
+    所以读侧(内心面板 / 记忆行派生)必须继续剥。
     """
     tpl = P.LIFE_EVENT_PREFIX  # "user不在时，角色产生的生活事件：{time}"
-    log = SessionLog("t")
-    # 她抄进去的那行:时间戳是**过期的**(09-11 20:41),与这一轮的时刻不同
+    # 她抄进去的那行:时间戳是**过期的**(09-11 20:41)
     dirt = "user不在时，角色产生的生活事件：09-11 20:41\n（从外面回来…）"
-    _append_completed_self_turn(log, 1, dirt, at=1_700_000_000.0)
-
-    text = log.derive_messages(life_event_prefix=tpl)[0]["content"][0]["text"]
-    # 只出现一次(外层是投影加的),正文完整
-    assert text.count("user不在时，角色产生的生活事件：") == 1, text
-    assert text.endswith("（从外面回来…）"), text
-    # 而且内层那个**过期时间戳**不许留在正文里
-    assert "09-11 20:41" not in text, text
+    out = strip_copied_prefix(dirt, tpl)
+    assert out == "（从外面回来…）", out
+    assert "09-11 20:41" not in out, out
 
     # 连抄多次也一次剥干净(她那轮真的叠过两行:09-12 07:18 + 09-14 09:33)
-    log2 = SessionLog("t")
     doubled = ("user不在时，角色产生的生活事件：09-12 07:18\n"
                "user不在时，角色产生的生活事件：09-14 09:33\n正文。")
-    _append_completed_self_turn(log2, 1, doubled, at=1_700_000_000.0)
-    t2 = log2.derive_messages(life_event_prefix=tpl)[0]["content"][0]["text"]
-    assert t2.count("user不在时，角色产生的生活事件：") == 1, t2
-    assert t2.endswith("正文。"), t2
+    assert strip_copied_prefix(doubled, tpl) == "正文。"
 
 
 def test_strip_copied_prefix_only_touches_the_leading_run():
@@ -621,8 +636,9 @@ if __name__ == "__main__":
     test_user_time_prefix_only_covers_the_window()
     test_user_time_prefix_labels_first_text_block_only()
     test_agent_loop_passes_user_time_prefix_down()
-    test_life_event_prefix_marks_ended_self_turns_only()
-    test_life_event_prefix_time_placeholder_and_zero_semantics()
-    test_life_event_prefix_not_doubled_when_she_copied_it()
+    test_ended_self_turn_never_reaches_the_context()
+    test_running_self_turn_still_sees_its_own_earlier_steps()
+    test_derive_messages_has_no_life_event_injection_knob_left()
+    test_copied_prefix_is_still_stripped_on_the_read_side()
     test_strip_copied_prefix_only_touches_the_leading_run()
     print("SessionLog all tests passed")

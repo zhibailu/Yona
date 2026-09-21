@@ -313,7 +313,6 @@ class SessionLog:
         fold_tool_traces: bool = False,
         retained_tools: set[str] | None = None,
         last_turns: int | None = None,
-        life_event_prefix: str = "",
         user_time_prefix: str = "",
     ) -> list[Message]:
         """
@@ -338,16 +337,26 @@ class SessionLog:
         user 说过"没有用户消息"这种怪话);**当前轮**的占位保留(它是本次
         调用的触发点,让模型知道要开新一段,而不是续写上一条 assistant)。
 
-        life_event_prefix(2026-09 加;2026-09-21 由 self_talk_prefix 改名):
-        她独处时产生的生活事件以 assistant 角色留在日志,真人聊天时进上下文
-        会变成"没有 user 打头的孤立 assistant"。投影时给**已结束的独处轮**
-        (自走轮与补写轮 —— 两者都是 source="self",触发时机不同、产物是同一个
-        东西)的 assistant 文本前拼一行「前缀 时间戳」再接正文,让模型分清这是
-        她过去的生活事件(UI 聊天流仍隐藏独处轮,只有内心面板和模型上下文看得到)。
-        前缀是内容层文案(由调用方传,如 personas 的 LIFE_EVENT_PREFIX);
-        支持 {time} 占位 = 换成那条生活事件发生时的时间
-        (%m-%d %H:%M,补写轮=离线时刻);不含 {time} 则自动追加时间戳。
-        空串 = 不加标记(默认,行为不变)。当前轮(进行中,无 turn/end)不加。
+        **生活事件不进投影(2026-09-21 用户拍板)。** 已结束的**独处轮**
+        (自走轮 / 补写轮 —— 都是 `source="self"`,触发时机不同、产物是同一个
+        东西)的 assistant 消息**整条跳过**,不再以 `assistant` 槽位进上下文。
+
+        为什么:**那是"她一个人时做的事",不是"她对用户说的话"** —— 两者挤在
+        `role` 这唯一的结构信道上就是"role 过载"。2026-09 曾经靠一个**文本**
+        前缀(`LIFE_EVENT_PREFIX`)去补这个区分,而模型会**照抄那个前缀**
+        (日志里有 2 条实证,其中一条还刻了个假时间戳)—— 前缀是补丁,这里才是根因。
+
+        取用路径只剩一条:**她自己的 `recall` 工具**(以 tool result 形式回来)。
+        ⚠️ 只跳**已结束**轮:当前轮(还没 turn/end)的 assistant 消息必须留着 ——
+        同一轮里 step 之间还要拿 tool-call / tool/result 当原料,跳掉会切出
+        **孤儿 tool 消息**,喂给模型不合法。
+
+        UI 聊天流本来就隐藏独处轮(`server/store.py` 的 `_messages_view`),
+        内心面板另有出口(`/admin/life-events`),所以这一跳只影响模型上下文。
+
+        ⚠️ `LIFE_EVENT_PREFIX` 那个模板**仍然要留着**:它是**读侧**识别用的 ——
+        日志里那 2 条脏字是唯一证据,`strip_copied_prefix` 靠它把被抄进正文的
+        标记剥掉(见 `character/personas.py`)。
 
         last_turns(2026-09 加,与 last_n 不同):按**已结束轮边界**保留最近
         N 轮 + 当前未结束轮,整体裁掉更旧的已结束轮 —— 绝不切散轮内的
@@ -449,9 +458,16 @@ class SessionLog:
                     (anchor, order, {"role": "user", "content": content})
                 )
             elif event.type == "assistant/message":
+                # 生活事件(已结束的独处轮)**不进投影** —— 2026-09-21 用户拍板:
+                # "既然都是 toolresult 的召回结果了,肯定不留常驻上下文里了啊"。
+                # 理由与范围见 derive_messages 的 docstring(只跳已结束轮,
+                # 当前轮的 assistant 必须留着,否则切出孤儿 tool 消息)。
+                if data.get("turn") in self_turns \
+                        and data.get("turn") in ended_turns:
+                    continue
                 content = data["content"]
                 if data.get("turn") in fold_turns:
-                    # 已结束轮：剔除非保真工具的 tool-call 块
+                    # 已结束轮:剔除非保真工具的 tool-call 块
                     content = [
                         b
                         for b in content
@@ -461,20 +477,6 @@ class SessionLog:
                 # 源头已在循环侧堵住,这里兜底防历史/外部日志。
                 if not content:
                     continue
-                # 生活事件标注(2026-09):已结束**独处轮**(自走轮 / 补写轮,
-                # 都是 source="self")的 assistant 文本前拼「前缀 时间戳」一行
-                # 再接正文 —— 她独处时写下的事进真人聊天上下文时带上自己的
-                # 时间戳,不冒充"对用户说的";前缀文案由调用方给
-                # (personas.LIFE_EVENT_PREFIX),留空 = 不加标记。
-                # 只给第一条文本块打标;纯 tool-call 消息(无生活事件文本)原样返回。
-                # strip_template:先把**她自己抄进正文**的那行标记剥掉再加 ——
-                # 否则会拼出两重标记,且内层那个时间戳是过期的(见 strip_copied_prefix)。
-                if life_event_prefix and data.get("turn") in self_turns \
-                        and data.get("turn") in ended_turns:
-                    content = _label_first_text(
-                        content, _stamp_prefix(life_event_prefix, event.time),
-                        strip_template=life_event_prefix,
-                    )
                 order += 1
                 anchored.append(
                     (anchor, order, {"role": "assistant", "content": content})

@@ -51,17 +51,16 @@ class AgentLoop:
         max_steps: int = 20,
         on_chunk: Callable[[dict[str, Any]], None] | None = None,
         fold_tool_traces: bool = False,
-        life_event_prefix: str = "",
         user_time_prefix: str = "",
     ) -> None:
         self.log = log
         self.llm = llm
         self.tools = tools
-        # life_event_prefix(2026-09 加;2026-09-21 由 self_talk_prefix 改名):
-        # 她独处时的生活事件进模型上下文时的前缀文案
-        # (透传给 derive_messages;内容层提供,如 personas.LIFE_EVENT_PREFIX)。
-        # 空串 = 不加标记。任何轮(含 user 聊天轮)看到历史里的生活事件都带标记。
-        self.life_event_prefix = life_event_prefix
+        # (生活事件的注入侧参数 2026-09-21 拆除:用户拍板"往事只走 recall 工具,
+        #  不留常驻上下文"。生活事件现在**整条不进投影**,所以不再需要前缀 ——
+        #  判定与范围见 core/session_log.derive_messages 的 docstring。
+        #  ⚠️ `LIFE_EVENT_PREFIX` 那个模板仍留在内容层:它是**读侧**识别用的
+        #  (剥掉被模型抄进正文的标记),日志里那 2 条脏字是唯一证据。)
         # user_time_prefix(2026-09-17 加):真人消息进上下文时的时间戳模板
         # (透传给 derive_messages;内容层提供,如 personas.USER_TIME_PREFIX)。
         # 空串 = 不加标记。只作用于 source=="user" 的消息 —— 自走占位不打标。
@@ -273,7 +272,6 @@ class AgentLoop:
                 fold_tool_traces=self.fold_tool_traces,
                 retained_tools=self._retained,
                 last_turns=max_rounds if max_rounds else None,
-                life_event_prefix=self.life_event_prefix,
                 user_time_prefix=self.user_time_prefix,
             )
         )

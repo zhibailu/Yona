@@ -39,14 +39,14 @@
   两种自走效果就是拨不同的时刻(单时间源被拨,仍是引擎那条钟)。
 - **补写窗口模拟**(b):选 她最后活跃 → 补写到此刻,LifeSampler 采样,逐件
   `set_time_cursor` 以历史时刻回放(引擎同款 note/空工具/时间游标),日志里
-  落下**带历史时间戳的生活事件**;之后 1 陪聊即见"孤立 assistant 被打前缀+时间戳"。
-- **生活事件前缀**(t):file 档 = personas.LIFE_EVENT_PREFIX 你写的值(引擎装配读
-  它);演示档只临时改 `eng._loop.life_event_prefix`,方便对比,不改文件。
+  落下**带历史时间戳的生活事件**。
+- (2026-09-21 拆)生活事件不再进模型上下文,取用只走 `recall` 工具 ——
+  原来那个「生活事件前缀」演示档(菜单 t)随注入侧一起删除。
 - LLM 报错不炸台:捕获后报一句回菜单。
 
 菜单:
   1 陪聊轮    2 自走轮    3 输入预览    b 补写模拟
-  v 注入时刻  t 生活事件前缀  m 换模型      w 上下文窗口
+  v 注入时刻  m 换模型      w 上下文窗口
   c 清空历史   q 退出
 """
 
@@ -94,7 +94,6 @@ if not _cfg or not _cfg.get("api_key") or not _cfg.get("base_url"):
 _log = SessionLog("prompt-lab")   # 本实验台的"会话卡";loop/工具/人设全用引擎的
 _model = (_cfg.get("model") or "").strip() or ""
 _max_rounds: int | None = None    # None=全量
-_prefix_mode = "file"             # file | off | 〔生活事件〕 | 〔生活事件·{time}〕(演示)
 # 虚拟时钟偏移(2026-09 用户三提后拍板的玩法):实验台"篡改当前时间"——
 # 虚拟当前时刻 = time.time() + offset。每次运行/清空后锚到**今天上午 9 点**,
 # 测自走轮前先打印日志尾巴(最近一轮末事件时间)作参照,再输入假冒时间。
@@ -213,23 +212,8 @@ def _rebuild() -> None:
     """
     importlib.reload(personas_mod)
     eng._build_engine(_cfg)  # 装配进 eng._loop / eng._composers / eng._llm
-    if _prefix_mode != "file":
-        # 演示档:临时覆盖真实 loop 的前缀(不改文件,对比用)
-        eng._loop.life_event_prefix = _effective_prefix()
 
 
-def _effective_prefix() -> str:
-    """生活事件前缀:file 档 = personas.py 里你写的值(引擎同源);演示档 = 内置。"""
-    p = personas_mod
-    if _prefix_mode == "file":
-        return p.LIFE_EVENT_PREFIX
-    if _prefix_mode == "off":
-        return ""
-    if _prefix_mode == "〔生活事件〕":
-        return "〔生活事件〕"
-    if _prefix_mode == "〔生活事件·{time}〕":
-        return "〔生活事件·{time}〕"
-    return p.LIFE_EVENT_PREFIX
 
 
 def _fmt_ts(ts: float) -> str:
@@ -291,7 +275,7 @@ def _print_system(source: str, log=None) -> None:
 
 def _build_messages(source: str, log=None) -> list[dict]:
     """引擎真实喂模型的 messages:直接调 eng._loop._build_messages(同进程私有,
-    与 run_turn 内部完全一致 —— system + 历史投影,前缀由引擎 loop 现读)。"""
+    与 run_turn 内部完全一致 —— system + 历史投影)。"""
     log = log if log is not None else _log
     return eng._loop._build_messages(
         eng._tools, source, log,
@@ -432,7 +416,7 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
         if ordinary_self and not replaying and not quiet_skip and anchor_s > 0:
             clock_ts, clock_tag = anchor_s, "事件start"
         print(f"\n===== {tag} · {_model or '(默认)'} · {clock_tag}时钟 "
-              f"{_fmt_ts(clock_ts)} · 前缀={_effective_prefix() or '(空)'} =====")
+              f"{_fmt_ts(clock_ts)} =====")
         if quiet_skip:
             tail = _tail_time(log)
             print(f"── 采样判定 [{_fmt_ts(tail) if tail else '—'} → "
@@ -571,8 +555,8 @@ def _run_backfill() -> None:
         finally:
             _log.clear_time_cursor()
             eng._backfill_clock["ts"] = 0.0
-    print(f"\n补写完成 {len(events)} 件。按 1 陪聊轮 → 历史里可看到这些生活事件"
-          "带前缀+离线时间戳(前缀为空时按 t 开演示档)。")
+    print(f"\n补写完成 {len(events)} 件。按 1 陪聊轮 —— 这些生活事件"
+          "**不进上下文**(2026-09-21 起),要看到它们得让她调 recall。")
 
 
 # ---------- 交互循环 ----------
@@ -581,22 +565,21 @@ def _menu() -> None:
     print("\n" + "─" * 60)
     tag = "真实墙钟" if not _clock_offset else "虚拟时钟"
     print(f"模型 {_model or '(引擎默认)'} · 窗口 {_max_rounds or '全量'} · "
-          f"生活事件前缀 {_effective_prefix() or '(空)'} · 现在 {_fmt_ts(_vnow())}({tag})")
+          f"现在 {_fmt_ts(_vnow())}({tag})")
     print("1 陪聊轮   2 自走轮   3 输入预览   b 补写模拟")
-    print("v 注入时刻  t 前缀     m 模型      w 窗口")
+    print("v 注入时刻  m 模型      w 窗口")
     print("c 清空历史  q 退出")
 
 
 def main() -> None:
-    global _log, _model, _max_rounds, _prefix_mode
+    global _log, _model, _max_rounds
     _anchor_morning()  # 每次运行:从今天上午 9 点开始(用户拍板)
     _rebuild()
     if "--preview" in sys.argv:
         eng._clock_override["ts"] = _vnow()  # 预览也落在 09:00 起的虚拟时钟
         print("=== 输入预览(不调模型)· user 轮(你说:在吗) ===")
         print_messages(_build_messages("user", _log), "user", _log)
-        _prefix_mode = "file"
-        print("\n=== 同上· self 轮(前缀=文件值) ===")
+        print("\n=== 同上· self 轮 ===")
         print_messages(_build_messages("self", _log), "self", _log)
         return
 
@@ -638,11 +621,6 @@ def main() -> None:
                 print_messages(_build_messages(src, _log), src, _log)
             finally:
                 eng._clock_override["ts"] = 0.0
-        elif choice == "t":
-            modes = ["file", "off", "〔生活事件〕", "〔生活事件·{time}〕"]
-            _prefix_mode = modes[(modes.index(_prefix_mode) + 1) % len(modes)]
-            _rebuild()  # 让引擎 loop 前缀 = 新档
-            print(f"生活事件前缀 → {_prefix_mode} ({_effective_prefix() or '(空)'})")
         elif choice == "m":
             if _MODELS:
                 _model = _MODELS[(_MODELS.index(_model) + 1) % len(_MODELS)] \
