@@ -300,7 +300,7 @@ class SessionStore:
                 anchored.append((anchor, order, e.seq, "user", text))
             elif e.type == "assistant/message":
                 if turn in self_turns:
-                    continue  # 卡片独处自语不进聊天流(内心面板看)
+                    continue  # 卡片独处的生活事件不进聊天流(内心面板看)
                 text = _blocks_text(data.get("content"))
                 if not text.strip():
                     continue

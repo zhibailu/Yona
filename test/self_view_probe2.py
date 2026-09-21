@@ -38,7 +38,7 @@ SELF_PERSONA = (
     "没有真正想做的事就到此为止,不要为了'做点什么'而行动,更不要为了用工具而用工具。\n"
     "你只能用可用工具做真实能做的事;没有对应工具的事,就只是在心里想想,"
     "不要假装自己已经做了。\n"
-    "回答像一个人独处时的自语,不要任务汇报腔,不要提'工具''系统''模型'。"
+    "回答像独处时随手记下的一笔生活事件,不要任务汇报腔,不要提'工具''系统''模型'。"
 )
 
 # 动作工具:change_outfit(全量给——她独处也能换衣服;时间不是工具了)
@@ -126,7 +126,7 @@ def main() -> None:
             if e.type == "assistant/message":
                 for b in e.data["content"]:
                     if b["type"] == "text":
-                        print(f"[自语] {b['text']}")
+                        print(f"[生活事件] {b['text']}")
                     elif b["type"] == "tool-call":
                         print(f"[调工具] {b['name']}({b['arguments'][:60]})")
             elif e.type == "tool/result":

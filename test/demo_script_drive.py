@@ -1,7 +1,7 @@
 """Demo 剧本驱动:按步骤打真实端点,输出原样内容(UTF-8 干净)。
 
 步骤:
- 0 内心活动(agent-feed)—— 她活着:心跳自走自语
+ 0 内心活动(life-events)—— 她活着:心跳自走生活事件
  1 建会话 + 聊天(触发工具:换衣服)→ workspace 动作轨迹
  2 busy:两条并发,第二条先收 busy 帧
  3 重启补齐由 server 启动逻辑负责(需要重启进程,脚本外验证)
@@ -68,7 +68,7 @@ def pretty_frames(frames):
 
 
 # 0) 她活着:内心活动
-show("0. 她活着 —— 内心活动(agent-feed,心跳自走的自语)", req("GET", "/admin/agent-feed"))
+show("0. 她活着 —— 内心活动(life-events,心跳自走的生活事件)", req("GET", "/admin/life-events"))
 
 # 1) 聊天触发工具
 sid = json.loads(req("POST", "/sessions", {"title": "demo-1"}))["session_id"]

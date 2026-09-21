@@ -1,11 +1,11 @@
 """Yona 服务层 · 观测视图(view)
 
-thin router 拆分:workspace(桌面)/ agent-feed(内心活动)/ runtime/status
+thin router 拆分:workspace(桌面)/ life-events(内心活动)/ runtime/status
 这类端点不做任何"动作",只是**从事件日志投影出给人看的数据** —— 纯读取。
 
 核心思想(VISION 决策 2/3):状态与行为都从事件日志派生,不另存。
 - 动作轨迹 = 所有卡片日志里的 tool/call + tool/result(观测优先,全局)
-- 内心活动 = **某张卡**的 chat.log 里 source=self 轮的自语(2026-09 每卡
+- 内心活动 = **某张卡**的 chat.log 里 source=self 轮的生活事件(2026-09 每卡
   life:面板跟随当前卡;session_id 缺省 = Yona 常驻旗舰)
 
 这些投影函数是纯函数(吃 store/日志),可以脱离 HTTP 单测。
@@ -19,6 +19,9 @@ import time
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+
+from character import personas as personas_mod
+from core.session_log import strip_copied_prefix
 
 from .. import engine
 
@@ -105,8 +108,13 @@ def all_action_trails() -> list[dict]:
     return trails
 
 
-def self_talks(session_id: str) -> list[dict]:
-    """内心活动 = 某张卡自己 chat.log 里自走轮的自语(它独处时在想什么)。"""
+def life_events(session_id: str) -> list[dict]:
+    """内心活动 = 某张卡自己 chat.log 里自走轮的生活事件(它独处时在想什么)。
+
+    ⚠️ 读的是**原生日志文本**,但会剥掉"被模型抄进正文"的那行标记
+    (`core.session_log.strip_copied_prefix`,与投影层同一个实现)——
+    日志原文一个字不动,只影响这里给 UI 看的东西。
+    """
     log = engine._store.load_log(session_id)
     self_turns = {
         e.data["turn"] for e in log.events
@@ -116,6 +124,7 @@ def self_talks(session_id: str) -> list[dict]:
     for e in log.events:
         if e.type == "assistant/message" and e.data.get("turn") in self_turns:
             text = _text_of(e.data.get("content"))
+            text = strip_copied_prefix(text, personas_mod.LIFE_EVENT_PREFIX)
             if text.strip():
                 out.append({
                     "text": text.strip()[:200],
@@ -128,7 +137,7 @@ def self_talks(session_id: str) -> list[dict]:
 
 @router.get("/workspace")
 async def get_workspace(session_id: str | None = None, limit: int = 18):
-    """桌面工作区:动作轨迹 = 全卡片 tool 派生(全局);内心活动 = 该卡自语。"""
+    """桌面工作区:动作轨迹 = 全卡片 tool 派生(全局);内心活动 = 该卡的生活事件。"""
     trails = all_action_trails()
     trails.sort(key=lambda a: a["created_at"], reverse=True)
     actions = [
@@ -137,10 +146,10 @@ async def get_workspace(session_id: str | None = None, limit: int = 18):
         for x in trails
     ]
     card_id = _target_card_id(session_id)
-    talks = self_talks(card_id)
-    talks.sort(key=lambda ev: ev["created_at"], reverse=True)
+    found = life_events(card_id)
+    found.sort(key=lambda ev: ev["created_at"], reverse=True)
     events = [
-        {"created_at": x["created_at"], "content": x["text"]} for x in talks
+        {"created_at": x["created_at"], "content": x["text"]} for x in found
     ]
     self_turn_count = sum(
         1 for e in engine._store.load_log(card_id).events
@@ -169,13 +178,13 @@ async def get_objects(limit: int = 18):
     return {"objects": []}
 
 
-@router.get("/admin/agent-feed")
-async def get_agent_feed(session_id: str | None = None, limit: int = 10):
-    """内心活动 = 某张卡自己日志里的自走轮自语(UI 跟随当前会话)。"""
-    talks = self_talks(_target_card_id(session_id))
-    talks.sort(key=lambda ev: ev["created_at"], reverse=True)
+@router.get("/admin/life-events")
+async def get_life_events(session_id: str | None = None, limit: int = 10):
+    """内心活动 = 某张卡自己日志里的自走轮的生活事件(UI 跟随当前会话)。"""
+    found = life_events(_target_card_id(session_id))
+    found.sort(key=lambda ev: ev["created_at"], reverse=True)
     events = [
-        {"created_at": x["created_at"], "content": x["text"]} for x in talks
+        {"created_at": x["created_at"], "content": x["text"]} for x in found
     ]
     return {"events": events[:limit], "mood": None}
 

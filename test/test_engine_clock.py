@@ -321,7 +321,7 @@ def test_event_view_anchored_at_event_start():
         assert got > 0
         s = eng._wake_anchor["start"]
         # lab 命中事件轮锚定(纯 lab,2026-09 用户拍板:产品心跳/脉冲不做):
-        # 世界钟 override = start、自语游标 = start+预算。
+        # 世界钟 override = start、生活事件游标 = start+预算。
         eng._clock_override["ts"] = s
         log.set_time_cursor(s + got * 60.0)
         try:

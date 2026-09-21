@@ -13,7 +13,7 @@
 | # | 边界(用户原话或要点) | 违反过的实例 |
 |---|---|---|
 | 1 | **内核 `core/` 是纯逻辑,不许为显示/实验台加钩子**。"谁准你往内核里加钩子了??就他妈改一下 lab" | a3b9682 给 `core/loop.py` 加 `on_input` 钩子 → 被 revert |
-| 2 | **lab 试出来的现象默认只留 prompt_lab,别推进产品执行路径**(心跳/脉冲/engine)。产品语义要用户明确拍板 | c6afb9f 把 lab"当前时间=事件start"推进 LifeLoop/pulse → d665a3a 回退 |
+| 2 | **lab 试出来的现象默认只留实验台(`prompt_lab/`、`turn_lab.py`),别推进产品执行路径**(心跳/脉冲/engine)。产品语义要用户明确拍板 | c6afb9f 把 lab"当前时间=事件start"推进 LifeLoop/pulse → d665a3a 回退 |
 | 3 | **人设文案在 `character/personas.py`(内容层);引擎只装配**;改人设改 personas,不是 server/UI;别把文案写死在装配代码里 | [时间预算] 句子曾写死在 engine producer → 归位 personas |
 | 4 | **`server/params.py` = 产品参数唯一来源**,✅拍板/⏳待拍;未拍的一律 ⏳,"禁止当已定使用",不许我给默认 | — |
 | 5 | **普通轮(自走/心跳/脉冲)与补写是同一 LifeSampler 事件算法**,只差触发点;预算锚 `[日志尾→当前]`,兜底 start+预算≤当前 | 612ae32 用浮空 `draw_budget_min` → a0c7d9e 改回锚 LifeSampler |

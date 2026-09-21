@@ -174,7 +174,7 @@ def test_self_placeholder_skipped_in_closed_turns():
     log.append("user/message", turn=1, source="self",
                content=[{"type": "text", "text": "【自动轮】占位串"}])
     log.append("assistant/message", turn=1, step=1,
-               content=[{"type": "text", "text": "她独处的自语"}])
+               content=[{"type": "text", "text": "她独处的生活事件"}])
     log.append("turn/end", turn=1, reason={"kind": "completed"})
     # turn2 = 进行中(模拟 _build_messages 调用时)
     log.append("turn/start", turn=2, source="self")
@@ -187,7 +187,7 @@ def test_self_placeholder_skipped_in_closed_turns():
     # 只有当前轮(turn2)的占位 user;turn1 的占位被跳过
     assert roles == ["assistant", "user"], roles
     assert "占位串(当前轮)" in texts[0]
-    assert "她独处的自语" in msgs[0]["content"][0]["text"]
+    assert "她独处的生活事件" in msgs[0]["content"][0]["text"]
 
 
 def test_real_user_messages_never_skipped():

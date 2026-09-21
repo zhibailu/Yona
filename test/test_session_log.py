@@ -7,8 +7,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.loop import AgentLoop
-from core.session_log import SessionLog
+from core.session_log import SessionLog, strip_copied_prefix
 from core.tools import ToolRegistry
+
+from character import personas as P
 
 
 def build_turn() -> SessionLog:
@@ -313,7 +315,7 @@ def _append_completed_turn(log, n: int) -> None:
 
 
 def _append_completed_self_turn(log, n: int, text: str, at: float) -> None:
-    """手造一轮完整已结束自走轮(source=self):占位 user + 自语 assistant。"""
+    """手造一轮完整已结束自走轮(source=self):占位 user + 一条生活事件。"""
     log.append("turn/start", turn=n, source="self", at=at)
     log.append("user/message",
                content=[{"type": "text", "text": "【自动轮】占位"}],
@@ -355,7 +357,7 @@ T0 = 1_700_000_000.0
 def test_user_time_prefix_marks_human_messages_only():
     """真人消息带时间戳;assistant 与自走占位【都不许】带。
 
-    为什么只标真人侧:模型模仿的是**它自己的输出** —— 自语那条标记就是这么
+    为什么只标真人侧:模型模仿的是**它自己的输出** —— 生活事件那条标记就是这么
     被抄进正文的(日志里已有 2 条 assistant 正文自带标记)。再给 assistant
     侧加一个可抄模板 = 重蹈覆辙。她的回复与真人消息同轮、时刻几乎相同,
     标了真人就等于把她的也夹住了。
@@ -364,16 +366,16 @@ def test_user_time_prefix_marks_human_messages_only():
     _append_completed_self_turn(log, 1, "星期天晚上,不想动。", at=T0)
     _append_human_turn(log, 2, at=T0 + 4200)
 
-    msgs = log.derive_messages(self_talk_prefix="〔自语·{time}〕",
+    msgs = log.derive_messages(life_event_prefix="〔生活事件·{time}〕",
                                user_time_prefix="[{time}]")
 
     users = [m for m in msgs if m["role"] == "user"]
     assert len(users) == 1, f"自走占位串不该进历史: {users}"
     assert users[0]["content"][0]["text"] == f"[{_stamp(T0 + 4200)}]\n问2", users[0]
 
-    # assistant 侧:自语带**自语**标记(原样),真人轮的回复一个字不加
+    # assistant 侧:生活事件带**前缀**标记(原样),真人轮的回复一个字不加
     assistants = [m for m in msgs if m["role"] == "assistant"]
-    assert assistants[0]["content"][0]["text"].startswith("〔自语·"), assistants[0]
+    assert assistants[0]["content"][0]["text"].startswith("〔生活事件·"), assistants[0]
     assert assistants[1]["content"][0]["text"] == "答2", (
         f"assistant 被标了时间戳 —— 那正是会被抄进正文的形式: {assistants[1]}"
     )
@@ -387,7 +389,7 @@ def test_user_time_prefix_placeholder_and_zero_semantics():
 
     placed = log.derive_messages(user_time_prefix="〔{time}〕")
     assert placed[0]["content"][0]["text"] == f"〔{stamp}〕\n问1", placed[0]
-    # 与 self_talk_prefix 同款约定:模板没写 {time} 就自动补一个时间戳
+    # 与 life_event_prefix 同款约定:模板没写 {time} 就自动补一个时间戳
     appended = log.derive_messages(user_time_prefix="〔投递〕")
     assert appended[0]["content"][0]["text"] == f"〔投递〕 {stamp}\n问1", appended[0]
     # 空串 = 原行为(回归保护)
@@ -451,42 +453,91 @@ def test_agent_loop_passes_user_time_prefix_down():
     assert [m for m in msgs2 if m["role"] == "user"][0]["content"][0]["text"] == "问1"
 
 
-def test_self_talk_prefix_marks_ended_self_turns_only():
-    """自走轮自语进上下文:已结束自走轮的 assistant 前拼「前缀 时间戳」行,
+def test_life_event_prefix_marks_ended_self_turns_only():
+    """自走轮生活事件进上下文:已结束自走轮的 assistant 前拼「前缀 时间戳」行,
     真人轮的消息不加(2026-09:避免孤立 assistant 冒充对用户说的话)。"""
     log = SessionLog("t")
     _append_completed_self_turn(
         log, 1, "星期天晚上,不想动。", at=1_700_000_000.0)
     _append_completed_turn(log, 2)  # 真人轮:问2/答2
 
-    # 不带前缀 = 原行为(自语裸文本保留)
+    # 不带前缀 = 原行为(生活事件裸文本保留)
     bare = [m for m in log.derive_messages() if m["role"] == "assistant"]
     assert bare[0]["content"][0]["text"] == "星期天晚上,不想动。"
 
-    msgs = log.derive_messages(self_talk_prefix="〔自语〕")
+    msgs = log.derive_messages(life_event_prefix="〔生活事件〕")
     self_txt = msgs[0]["content"][0]["text"]
     # 前缀 + 空格 + 时间戳(%m-%d %H:%M)+ 换行 + 正文
     import re
-    assert re.match(r"^〔自语〕 \d{2}-\d{2} \d{2}:\d{2}\n", self_txt), self_txt
+    assert re.match(r"^〔生活事件〕 \d{2}-\d{2} \d{2}:\d{2}\n", self_txt), self_txt
     assert self_txt.endswith("星期天晚上,不想动。"), self_txt
     # 真人轮 assistant 不被加前缀
     user_turn_txt = msgs[2]["content"][0]["text"]
     assert user_turn_txt == "答2", user_turn_txt
 
 
-def test_self_talk_prefix_time_placeholder_and_zero_semantics():
+def test_life_event_prefix_time_placeholder_and_zero_semantics():
     """{time} 占位换成时间;空前缀(默认)= 完全不改。"""
     log = SessionLog("t")
     _append_completed_self_turn(log, 1, "晚风凉凉的。", at=1_700_000_000.0)
     _append_completed_self_turn(log, 2, "想睡了。", at=1_700_010_000.0)
 
     # {time} 占位:直接替换,不带多余空格
-    msgs = log.derive_messages(self_talk_prefix="〔自语·{time}〕")
+    msgs = log.derive_messages(life_event_prefix="〔生活事件·{time}〕")
     first = msgs[0]["content"][0]["text"].split("\n")[0]
-    assert first.startswith("〔自语·"), first
+    assert first.startswith("〔生活事件·"), first
     assert first.endswith("〕"), first
     # 空前缀 = 不改(回归保护)
-    assert log.derive_messages() == log.derive_messages(self_talk_prefix="")
+    assert log.derive_messages() == log.derive_messages(life_event_prefix="")
+
+
+def test_life_event_prefix_not_doubled_when_she_copied_it():
+    """**投影必须幂等**:正文里已经有那行标记时,不许再叠一层。
+
+    背景(2026-09-21 实测的脏数据):模型会**模仿自己的输出**,把投影加的那行
+    「前缀 + 时间戳」当正文写了下来 —— 真卡片里有 2 条。不剥的话下一次投影
+    拼出**两重**标记,而且内层那个时间戳是**过期的**
+    (轮 14:外层 09-12 07:18、内层 09-11 20:41)。
+    根因是 role 过载(见 docs/decisions/TIMELINE.md「三、方向探索」);
+    这里测的是那道读侧补丁。
+    """
+    tpl = P.LIFE_EVENT_PREFIX  # "user不在时，角色产生的生活事件：{time}"
+    log = SessionLog("t")
+    # 她抄进去的那行:时间戳是**过期的**(09-11 20:41),与这一轮的时刻不同
+    dirt = "user不在时，角色产生的生活事件：09-11 20:41\n（从外面回来…）"
+    _append_completed_self_turn(log, 1, dirt, at=1_700_000_000.0)
+
+    text = log.derive_messages(life_event_prefix=tpl)[0]["content"][0]["text"]
+    # 只出现一次(外层是投影加的),正文完整
+    assert text.count("user不在时，角色产生的生活事件：") == 1, text
+    assert text.endswith("（从外面回来…）"), text
+    # 而且内层那个**过期时间戳**不许留在正文里
+    assert "09-11 20:41" not in text, text
+
+    # 连抄多次也一次剥干净(她那轮真的叠过两行:09-12 07:18 + 09-14 09:33)
+    log2 = SessionLog("t")
+    doubled = ("user不在时，角色产生的生活事件：09-12 07:18\n"
+               "user不在时，角色产生的生活事件：09-14 09:33\n正文。")
+    _append_completed_self_turn(log2, 1, doubled, at=1_700_000_000.0)
+    t2 = log2.derive_messages(life_event_prefix=tpl)[0]["content"][0]["text"]
+    assert t2.count("user不在时，角色产生的生活事件：") == 1, t2
+    assert t2.endswith("正文。"), t2
+
+
+def test_strip_copied_prefix_only_touches_the_leading_run():
+    """**只剥行首** —— 写在中间的不动(那种得人看一眼,别静默改语义)。"""
+    tpl = P.LIFE_EVENT_PREFIX
+    leading = "user不在时，角色产生的生活事件：09-11 20:41\n正文"
+    assert strip_copied_prefix(leading, tpl) == "正文"
+
+    middle = "前面的话。" + leading
+    assert strip_copied_prefix(middle, tpl) == middle
+
+    # 模板为空 = 什么都不做(内核默认关)
+    assert strip_copied_prefix(leading, "") == leading
+    # 不含 {time} 的模板:允许尾部跟一个时间戳
+    assert strip_copied_prefix("〔生活事件〕 09-11 20:41\n正文",
+                               "〔生活事件〕") == "正文"
 
 
 def test_last_turns_window_keeps_recent_ended_plus_open_turn():
@@ -570,6 +621,8 @@ if __name__ == "__main__":
     test_user_time_prefix_only_covers_the_window()
     test_user_time_prefix_labels_first_text_block_only()
     test_agent_loop_passes_user_time_prefix_down()
-    test_self_talk_prefix_marks_ended_self_turns_only()
-    test_self_talk_prefix_time_placeholder_and_zero_semantics()
+    test_life_event_prefix_marks_ended_self_turns_only()
+    test_life_event_prefix_time_placeholder_and_zero_semantics()
+    test_life_event_prefix_not_doubled_when_she_copied_it()
+    test_strip_copied_prefix_only_touches_the_leading_run()
     print("SessionLog all tests passed")

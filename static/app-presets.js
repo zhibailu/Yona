@@ -106,7 +106,7 @@
                 const q = currentSessionId
                     ? `session_id=${encodeURIComponent(currentSessionId)}&limit=8`
                     : 'limit=8';  // 没会话时服务端默认 Yona(常驻旗舰)
-                const res = await fetch(`${API}/admin/agent-feed?${q}`);
+                const res = await fetch(`${API}/admin/life-events?${q}`);
                 if (!res.ok) return;
                 const data = await res.json();
                 // 更新心情

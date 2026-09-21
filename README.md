@@ -87,7 +87,7 @@ If you've read the agent kernels of OpenAI Codex or DeepSeek Harness, Yona's cor
 | loop with `turn/step` boundaries | `AgentLoop` | dsh `step()` / Codex agent loop |
 | schema-driven tool calling | `ToolRegistry` | Codex / dsh tool use |
 | delete/edit = annotate, never rewrite the log | `surface/shadow`, `replace/compact` | dsh `surface.ts`, Codex fork semantics |
-| per-step LLM call & token observability | llm-log / agent-feed | agent telemetry |
+| per-step LLM call & token observability | llm-log / life-events | agent telemetry |
 
 **The difference is the goal.** Codex uses it to *write code*; Yona uses it to *live a life* — the same agent-harness core attached to a life sampler so it acts autonomously, with continuity, and within a time budget. A clean open-source case of "same engine, different purpose." Read the full breakdown: **[COMPARISON.md](./docs/public/COMPARISON.md)**.
 

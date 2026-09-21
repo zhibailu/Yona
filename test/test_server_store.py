@@ -102,7 +102,7 @@ def test_flagship_recreated_after_delete_and_archived():
 
 
 def test_self_turn_not_in_chat_view():
-    """自走轮(source=self)的内容不进聊天流视图(占位/自语走内心活动)。"""
+    """自走轮(source=self)的内容不进聊天流视图(占位/生活事件走内心活动)。"""
     store = SessionStore(Path(tempfile.mkdtemp()))
     sid = store.create_session("test")
     log = store.load_log(sid)

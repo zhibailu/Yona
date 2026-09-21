@@ -84,7 +84,7 @@ _tools = ToolRegistry([make_change_outfit_tool(_state)])
 #
 # 三条约束都是实测过的,**顺序不能动**(证据 test/test_subagent_wiring.py):
 #   ① 工具在**模块加载时**注册一次,llm 靠可变句柄晚绑定。因为 _build_engine
-#      会重跑(下面三条调用点 + prompt_lab),而 ToolRegistry.register 撞重名会抛
+#      会重跑(下面三条调用点 + turn_lab),而 ToolRegistry.register 撞重名会抛
 #      「已注册」(core/tools.py:48)—— 写在 _build_engine 里会炸在"用户换连接"这条路上。
 #   ② 注册必须发生在 _loop 构造**之前**:AgentLoop 只在构造时快照一遍
 #      retain_result(core/loop.py:75-78),晚注册的痕迹会在后续轮被折掉,血缘从视图消失。
@@ -185,7 +185,7 @@ _life_gate: "ServerGate | None" = None  # 补写/心跳跑完也 mark_self,节�
 # 回放轮世界时钟:补写轮跑之前设为 slot 起点,backfill_composer 的 world section
 # 每 step 现取它 —— 模型看到的时间 = 历史时刻,墙钟不混入。仅在回放轮内被设。
 _backfill_clock: dict[str, float] = {"ts": 0.0}
-# 实验台/演示"当前时间"覆盖(prompt_lab 注入间隔/时刻用,2026-09):ts>0 时,
+# 实验台/演示"当前时间"覆盖(turn_lab 注入间隔/时刻用,2026-09):ts>0 时,
 # 陪聊/自走 composer 的世界 section 报它,而非墙钟 —— 仍是单时间源,只是源被拨过。
 # 产品路径从不设它(恒 0 = 真实墙钟);与 _backfill_clock 分开:回放轮的世界钟
 # 跟历史游标走(补写),普通轮的"现在"才读这里。
@@ -199,7 +199,7 @@ _clock_override: dict[str, float] = {"ts": 0.0}
 # 段报它;触发方跑完要清回 0(end_self_wake)。
 _wake_budget: dict[str, float] = {"min": 0.0}
 # 命中事件的 start(2026-09 用户拍板范围修正):begin_self_wake 把窗口里命中
-# 那件事件的 start 记在这里,**暴露给要锚定叙述视图的调用方(实验台 prompt_lab:
+# 那件事件的 start 记在这里,**暴露给要锚定叙述视图的调用方(实验台 turn_lab:
 # 强制/命中轮把 [当前时间] 拨到事件 start、时间线从它派生)**。产品自走/心跳/
 # 脉冲路径不用它 —— 它们照旧在触发时刻叙述,不改产品输出(锚定试验暂只留
 # lab)。0 = 无事件/未激活;end_self_wake 一起清。
@@ -603,9 +603,9 @@ def begin_self_wake(log=None, rng=None) -> float:
     **调用方契约**:返回本轮预算(分钟)—— 0 = 该轮不触发任何事件,安静结束:
     不调模型、不写日志、不进冷却(心跳从同一锚继续等下一件);>0 = 有事件可叙,
     跑这一轮。命中事件是否/如何**锚到事件起点叙述**([当前时间] = start、时间线
-    从 start 派生、自语落事件结束)由**调用方**(实验台)决定 —— 本函数只把
+    从 start 派生、生活事件落事件结束)由**调用方**(实验台)决定 —— 本函数只把
     该事件的 start 记进 `_wake_anchor`,不改产品自走/心跳的输出(产品路径照旧
-    在触发时刻叙述;2026-09 用户拍板:这套事件锚定暂只留在 prompt_lab 试验)。
+    在触发时刻叙述;2026-09 用户拍板:这套事件锚定暂只留在 turn_lab 试验)。
 
     rng 可注入(单测固定复现);引擎默认随机。
     """
@@ -774,9 +774,19 @@ def _build_engine(cfg: dict | None = None) -> None:
         _tools,
         system_prompt=sys_by_source,
         max_steps=8,
-        fold_tool_traces=False,
-        # 自走轮自语进上下文的前缀(内容层文案;见 personas.SELF_TALK_PREFIX)
-        self_talk_prefix=personas_mod.SELF_TALK_PREFIX,
+        # 折叠视图开(2026-09-19 用户拍板,原为 False):
+        # **已结束轮里,没声明 retain_result 的工具痕迹不再进模型输入**,只留她
+        # 说过的话。要的就是用户那句「tool 的 result 是个**瞬时产物**,不拼进
+        # 常驻内容,即使 system 内也不放」—— 需要就现调。
+        # 谁保住痕迹由**工具自己声明**(core/tools.py:26-28):
+        #   launch_subagent = True  (一次性委派,重查不了 → 跨轮保真)
+        #   recall / change_outfit = False(需要就现调;穿着在 [当前角色状态] 段里)
+        # 改之前实测过 False 的后果:recall 的原文跨轮留在上下文里
+        # (prompt_lab/check_transient.py,0 花费可复跑)。
+        # 折叠**只改投影,日志原文一个字不动**(core/session_log.py:274)。
+        fold_tool_traces=True,
+        # 独处生活事件进上下文的前缀(内容层文案;见 personas.LIFE_EVENT_PREFIX)
+        life_event_prefix=personas_mod.LIFE_EVENT_PREFIX,
         # 真人消息进上下文的时间戳(内容层模板;见 personas.USER_TIME_PREFIX)。
         # 2026-09-17:历史里没有时间轴,她算不出"距上一条多久" —— 两条相隔
         # 69 分钟的对话被她读成了连续的("刚不是说了嘛,你连着问两遍")。

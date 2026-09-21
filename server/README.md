@@ -33,7 +33,8 @@
 - **普通轮(自走/心跳/脉冲)与补写 = 同一 LifeSampler 事件算法**,只差触发点;
   预算锚 `[日志尾→当前]`,兜底 `start+预算 ≤ 当前时刻`,无事件 → 安静结束
   (不调 LLM)。触发语义、锚推进详见 `docs/protocols/LIFE_BACKFILL.md`。
-- **lab(实验台)试出来的现象默认只留 prompt_lab,别推进 server 产品执行路径**
+- **lab(实验台)试出来的现象默认只留实验台(`prompt_lab/`、`turn_lab.py`),
+  别推进 server 产品执行路径**
   (AI-GUARDRAILS §一.2 —— 曾把 lab 现象误推进 LifeLoop/pulse,已回退)。
 - 文案不在 server:人设/情境在 character/personas.py,engine 只装配。引擎里出现
   系统口吻句子 = 越位,该进 personas(AI-GUARDRAILS §一.3)。

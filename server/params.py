@@ -54,7 +54,7 @@ WAKE_AFTER_GAP_SECONDS = 30 * 60
 
 # ✅ 2026-09 拍板:gate 三值(cooldown=90s / interval=60s / wakes=3/天)
 #   check 命中概率 = SELF_WAKES_PER_DAY × shape(t) × Δt
-#   形状自动来自 SHAPE_TABLE(深夜=0 不醒);wakes 对标补写的 K(活着时的自语
+#   形状自动来自 SHAPE_TABLE(深夜=0 不醒);wakes 对标补写的 K(活着时的生活事件
 #   频率,与"值得记的事"是两码事);验证:test/gate_probe.py。
 SELF_WAKES_PER_DAY = 3.0   # ✅ 2026-09 拍板:每天期望自发醒次数
 HEARTBEAT_COOLDOWN_SEC = 90.0   # ✅ 2026-09 拍板:刚自走过,多久内不醒

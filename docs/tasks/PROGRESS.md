@@ -6,7 +6,7 @@
 
 - **端点**:24 个(实测 `routes` 数),契约与旧 UI 对齐;聊天 SSE
   (token/tool_status/busy/done)、治理(shadow/replace)、观测
-  (workspace/agent-feed/runtime)、图片/背景、会话 CRUD。
+  (workspace/life-events/runtime)、图片/背景、会话 CRUD。
 - **测试**:12 个测试文件全绿(`test/test_*.py`,Mock + 真模型双路可跑)。
 - **探针/工具**:`backfill_probe`(dist/inv/table/real)、`backfill_scan`、
   `k_compare`(K 对比)、`gate_probe`(心跳闸门蒙特卡洛)、`rate_curve.py` +

@@ -14,7 +14,7 @@ thin router 拆分(2026-09,布局 B):本文件只留**路由薄壳** —— 每�
 - 会话:sessions CRUD(每会话一个 SessionLog,落盘 data/sessions/)
 - 聊天:POST /chat/stream(SSE 逐 token,契约:token/tool_status/busy/done)
 - 治理:DELETE /messages/from/{id}(= shadow tail-cut)、PATCH /messages/{id}(= replace)
-- 观测:GET /workspace(动作轨迹从日志派生)、GET /admin/agent-feed(内心活动)
+- 观测:GET /workspace(动作轨迹从日志派生)、GET /admin/life-events(内心活动)
 - 配置:settings/models/context-sources;预设 CRUD + 模型发现 = server/app/api/config.py
 - 杂项:images/bg-position 纯文件存取
 """

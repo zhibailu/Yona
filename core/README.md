@@ -24,9 +24,9 @@
   `_TracingLLM`)包,`core/loop.py` 不许为此改**(AI-GUARDRAILS §一.1)。
 - `AgentLoop.run_turn` 已支持可选字段(temperature/max_tokens/model/max_rounds/
   system_prompt),供上层覆盖;`source=self` 无真人消息时 user 槽放协议占位串。
-- 自走轮自语进上下文打标(`self_talk_prefix`)在**投影层**做,不是写日志时。
+- 自走轮生活事件进上下文打标(`life_event_prefix`)在**投影层**做,不是写日志时。
 
 ## 进内核前守则
 
-lab/显示/调试诉求 → 先看装配层(prompt_lab、server/app/engine)能不能包;不能才谈
+lab/显示/调试诉求 → 先看装配层(实验台 `prompt_lab/` / `turn_lab.py`、server/app/engine)能不能包;不能才谈
 内核,而且要先报给用户。改动跑 `test/test_loop.py` 等对应测试。

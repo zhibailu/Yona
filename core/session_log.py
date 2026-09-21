@@ -13,6 +13,7 @@ Yona 新内核 · 事件源会话日志 (SessionLog)
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -33,7 +34,7 @@ def _stamp_prefix(prefix: str, ts: float, fmt: str = "%m-%d %H:%M") -> str:
     """把"带 {time} 的标记模板"渲染成一行标记(内容层给模板,内核只填时间)。
 
     {time} 就地替换;模板不含 {time} 则后面补一个时间戳 ——
-    与 SELF_TALK_PREFIX / USER_TIME_PREFIX 同一套约定。
+    与 LIFE_EVENT_PREFIX / USER_TIME_PREFIX 同一套约定。
     """
     stamp = time.strftime(fmt, time.localtime(ts))
     if "{time}" in prefix:
@@ -41,18 +42,74 @@ def _stamp_prefix(prefix: str, ts: float, fmt: str = "%m-%d %H:%M") -> str:
     return f"{prefix} {stamp}"
 
 
-def _label_first_text(content: Any, label: str) -> Any:
+def _label_first_text(content: Any, label: str, strip_template: str = "") -> Any:
     """给内容列表的**第一条文本块**前面加一行标记;没有文本块则原样返回。
 
     只标第一条:一条消息可能带多个块(text / tool-call),标一次就够 ——
     每条都标会在正文里叠出多行标记(而正文是模型会"接着写"的地方)。
+
+    strip_template 非空时,先把**被抄进正文的**那一行标记剥掉再加
+    (见 strip_copied_prefix)—— 不剥就会拼出**两重**标记。
     """
     for i, b in enumerate(content):
         if isinstance(b, dict) and b.get("type") == "text":
             out = list(content)
-            out[i] = {**b, "text": f"{label}\n{b.get('text', '')}"}
+            text = b.get("text", "")
+            if strip_template:
+                text = strip_copied_prefix(text, strip_template)
+            out[i] = {**b, "text": f"{label}\n{text}"}
             return out
     return content
+
+
+# 时间戳识别式:比 _stamp_prefix 的默认格式宽松一档。
+# ⚠️ 必须是 `\d{1,4}(?:-\d{1,2}){1,2}` —— 前缀里的时间默认是 **`09-11 20:41`(月-日)**,
+#    两段!写成"年月日三段"会一个都匹配不上(2026-09-21 被回归测试当场抓到)。
+_TIME_TOKEN = r"\d{1,4}(?:-\d{1,2}){1,2}\s+\d{1,2}:\d{1,2}"
+
+
+def copied_prefix_re(template: str) -> re.Pattern[str] | None:
+    """由标记模板推出「被抄进正文」的识别式(模板为空 → None)。
+
+    `{time}` 位置换成**任意时间戳** —— 抄进去的那个时间往往是**过期的**
+    (她抄的是当时看到的那条标记里的时间,不是自己这一轮的时刻),
+    按当前轮的 `_stamp_prefix(...)` 去精确匹配是匹配不上的。
+    模板不含 `{time}` 时,允许尾部跟一个时间戳(与 `_stamp_prefix` 同款约定)。
+    """
+    if not template:
+        return None
+    body = re.escape(template)
+    if "{time}" in template:
+        body = body.replace(re.escape("{time}"), _TIME_TOKEN)
+    else:
+        body = body + r"(?:\s+" + _TIME_TOKEN + r")?"
+    # 连续抄了多次也要一次剥干净
+    return re.compile(r"^(?:" + body + r"\s*)+")
+
+
+def strip_copied_prefix(text: str, template: str) -> str:
+    """剥掉**被模型抄进正文**的那行标记(可能连抄多次)。
+
+    **为什么会发生**:投影层给正文拼了一行「标记 + 时间戳」(她独处时写的事、
+    真人消息的时间戳,都是这么拼的),而**模型会模仿自己的输出** ——
+    它把这一行当成正文的一部分写了下来。日志里已有实例(2 条)。
+
+    **不剥会怎样**(实测):下一次投影拼出**两重标记**,而且内层那个时间戳
+    还是**过期的** —— 轮 14 外层 `09-12 07:18`、内层 `09-11 20:41`。
+    模型于是拿到一个错误的前提,这正是本项目最在意的那类错。
+
+    识别式**由 template 现推**:内核不写死任何文案(文案在内容层)。
+
+    ⚠️ **只剥行首**。写在中间的不动 —— 那种得人看一眼,别静默改语义。
+    ⚠️ 只治**读侧**:日志原文一个字不动(日志即真相)。
+       根因是 **role 过载**(自走轮投影成 `assistant`,和"她对你说的话"同槽位),
+       见 `docs/decisions/TIMELINE.md` 「三、方向探索」——
+       这里是补丁,**不是**那条未决项的替代。
+    """
+    pat = copied_prefix_re(template)
+    if pat is None:
+        return text
+    return pat.sub("", text)
 
 
 @dataclass
@@ -256,7 +313,7 @@ class SessionLog:
         fold_tool_traces: bool = False,
         retained_tools: set[str] | None = None,
         last_turns: int | None = None,
-        self_talk_prefix: str = "",
+        life_event_prefix: str = "",
         user_time_prefix: str = "",
     ) -> list[Message]:
         """
@@ -281,12 +338,14 @@ class SessionLog:
         user 说过"没有用户消息"这种怪话);**当前轮**的占位保留(它是本次
         调用的触发点,让模型知道要开新一段,而不是续写上一条 assistant)。
 
-        self_talk_prefix(2026-09 加):自走轮的自语以 assistant 角色留在日志,
-        真人聊天时进上下文会变成"没有 user 打头的孤立 assistant"。投影时给
-        **已结束**自走轮的 assistant 文本前拼一行「前缀 时间戳」再接正文,
-        让模型分清这是她过去的自语(UI 聊天流仍隐藏自走轮,只有内心面板和
-        模型上下文看得到)。前缀是内容层文案(由调用方传,如 personas 的
-        SELF_TALK_PREFIX);支持 {time} 占位 = 换成那句自语发生时的时间
+        life_event_prefix(2026-09 加;2026-09-21 由 self_talk_prefix 改名):
+        她独处时产生的生活事件以 assistant 角色留在日志,真人聊天时进上下文
+        会变成"没有 user 打头的孤立 assistant"。投影时给**已结束的独处轮**
+        (自走轮与补写轮 —— 两者都是 source="self",触发时机不同、产物是同一个
+        东西)的 assistant 文本前拼一行「前缀 时间戳」再接正文,让模型分清这是
+        她过去的生活事件(UI 聊天流仍隐藏独处轮,只有内心面板和模型上下文看得到)。
+        前缀是内容层文案(由调用方传,如 personas 的 LIFE_EVENT_PREFIX);
+        支持 {time} 占位 = 换成那条生活事件发生时的时间
         (%m-%d %H:%M,补写轮=离线时刻);不含 {time} 则自动追加时间戳。
         空串 = 不加标记(默认,行为不变)。当前轮(进行中,无 turn/end)不加。
 
@@ -303,7 +362,7 @@ class SessionLog:
         "现在几点"她知道,"距上一条多久"她算不出来(减法没有输入);实测
         两条相隔 69 分钟的话被她读成连续的("刚不是说了嘛,你连着问两遍")。
         **只标真人侧(source=="user")**,理由两条:
-          1. 模型模仿的是**它自己的输出** —— 自走自语那条标记就是这么被抄进
+          1. 模型模仿的是**它自己的输出** —— 生活事件那条标记就是这么被抄进
              正文的,不能再给 assistant 侧加新的可抄模板;
           2. 她的回复与真人消息同轮、时刻几乎相同,**标了真人就等于夹住了她的**。
         自走轮的占位消息(source="self")不打标;source 缺省按 "user" 处理
@@ -327,7 +386,7 @@ class SessionLog:
         ended_turns = {e.data["turn"] for e in self._events if e.type == "turn/end"}
         fold_turns = ended_turns if fold_tool_traces else set()
         # 自走轮集合(turn/start 带 source):assistant 消息本身不带 source,
-        # 靠轮号归属 —— 判断"这条自语是谁的"用轮号查 self 轮。
+        # 靠轮号归属 —— 判断"这条生活事件是谁的"用轮号查 self 轮。
         self_turns = {
             e.data["turn"]
             for e in self._events
@@ -382,7 +441,8 @@ class SessionLog:
                 # "距上一条多久";只标真人侧,理由见 docstring 的 user_time_prefix。
                 if user_time_prefix and data.get("source", "user") == "user":
                     content = _label_first_text(
-                        content, _stamp_prefix(user_time_prefix, event.time)
+                        content, _stamp_prefix(user_time_prefix, event.time),
+                        strip_template=user_time_prefix,
                     )
                 order += 1
                 anchored.append(
@@ -401,15 +461,19 @@ class SessionLog:
                 # 源头已在循环侧堵住,这里兜底防历史/外部日志。
                 if not content:
                     continue
-                # 自走轮自语标注(2026-09):已结束自走轮的 assistant 文本前拼
-                # 「前缀 时间戳」一行再接正文 —— 她独处时说的话进真人聊天上下文
-                # 时带上自己的时间戳,不冒充"对用户说的";前缀文案由调用方给
-                # (personas.SELF_TALK_PREFIX),留空 = 不加标记。
-                # 只给第一条文本块打标;纯 tool-call 消息(无自语文本)原样返回。
-                if self_talk_prefix and data.get("turn") in self_turns \
+                # 生活事件标注(2026-09):已结束**独处轮**(自走轮 / 补写轮,
+                # 都是 source="self")的 assistant 文本前拼「前缀 时间戳」一行
+                # 再接正文 —— 她独处时写下的事进真人聊天上下文时带上自己的
+                # 时间戳,不冒充"对用户说的";前缀文案由调用方给
+                # (personas.LIFE_EVENT_PREFIX),留空 = 不加标记。
+                # 只给第一条文本块打标;纯 tool-call 消息(无生活事件文本)原样返回。
+                # strip_template:先把**她自己抄进正文**的那行标记剥掉再加 ——
+                # 否则会拼出两重标记,且内层那个时间戳是过期的(见 strip_copied_prefix)。
+                if life_event_prefix and data.get("turn") in self_turns \
                         and data.get("turn") in ended_turns:
                     content = _label_first_text(
-                        content, _stamp_prefix(self_talk_prefix, event.time)
+                        content, _stamp_prefix(life_event_prefix, event.time),
+                        strip_template=life_event_prefix,
                     )
                 order += 1
                 anchored.append(

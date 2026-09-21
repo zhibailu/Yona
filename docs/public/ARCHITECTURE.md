@@ -170,7 +170,7 @@ To change characters without touching code, a character-preset pack (cf. dsh age
 
 Vision: observability first, not the front-end. You can watch the agent "think" live:
 
-- **Transcript / inner-thought feed (agent-feed)**: projected from the log — the character's own words and inner monologue from autonomous turns (timestamped, never pretending to be "said to the user").
+- **Transcript / inner-thought feed (life-events)**: projected from the log — the character's own words and inner monologue from autonomous turns (timestamped, never pretending to be "said to the user").
 - **llm-log panel (admin)**: every real LLM call's input/output/token usage, ring buffer + live SSE. All real calls go through one choke point (`_TracingLLM` wrapper); no scattered instrumentation.
 - Tool calls are fully traced in the event log; projection can fold them (tool trace = view, not log).
 
