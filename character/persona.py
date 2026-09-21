@@ -22,6 +22,9 @@ from .state import CharacterState
 
 # 小夜子默认段优先级
 _PERSONA_PRIORITY = 10
+# 轮次情境:紧跟人设之后、世界/状态之前。原先这里是个裸 `12`(本文件其余段全用常量),
+# 命名是为了让"位置在 persona 与 world 之间"这件事在常量表里看得见,不是别处共享的值。
+_SITUATION_PRIORITY = 12
 _WORLD_PRIORITY = 15
 _STATE_PRIORITY = 20
 _USAGE_PRIORITY = 30
@@ -42,7 +45,11 @@ def make_world_section(
     """
     clock = now or time.localtime
 
-    def _world_text(values: dict) -> str:
+    # 参数名带下划线:本段内容来自闭包 `clock`,**用不到 values**。
+    # 但签名不能省 —— Producer 协议要求就是 `Callable[[dict], str | None]`
+    # (core/composer.py 的 `Producer` 类型别名),`SystemSection.render` 固定位置传一个 values
+    # (core/composer.py 的 `SystemSection.render()`)。省掉参数 = 调用时 TypeError。
+    def _world_text(_values: dict) -> str:
         t = clock()
         return (
             f"[当前时间] {time.strftime('%Y-%m-%d %H:%M', t)} "
@@ -74,7 +81,9 @@ def make_persona_section(base: str) -> SystemSection:
 def make_state_section(state: CharacterState) -> SystemSection:
     """状态投影段:闭包 state,每次 compose 现取 -> 状态变了不用手动重投影。"""
 
-    def _project(values: dict) -> str | None:
+    # 同 `_world_text`:内容来自闭包 `state`,**用不到 values**;
+    # 参数留着只为满足 Producer 协议(core/composer.py 的 `Producer` / `SystemSection.render()`)。
+    def _project(_values: dict) -> str | None:
         text = state.project()
         if not text:
             return None  # 无字段时不写这段
@@ -96,7 +105,7 @@ def make_situation_section(text: str) -> SystemSection:
     """
     return SystemSection(
         name="situation",
-        priority=12,
+        priority=_SITUATION_PRIORITY,
         template=text,
     )
 

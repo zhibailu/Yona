@@ -37,6 +37,13 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
+# 提到模块顶部(2026-09 清理)。以前它写在 `rows_from_events` 的函数体里,
+# **不是**为了避开循环 import —— `session_log` 不 import `memory`,这个方向
+# 本来就没有环(它只 import re / time / dataclasses / typing)。写在函数里
+# 纯粹是历史遗留,代价是每次调用都过一次 import 语句、且读代码的人要翻进去
+# 才看得见这个依赖。与 `re` / `time` 的写法统一。
+from .session_log import strip_copied_prefix
+
 # 融合权重与 BM25 的刻度常数 —— 都是**实测出来的**,别凭手感改
 W_SPARSE = 0.2      # 稀疏路权重(0.2 是扫描里的平台起点)
 BM25_K = 4.0        # s/(s+K):把无上界的 BM25 压到 0~1,且**保留绝对刻度**
@@ -78,7 +85,8 @@ def _turns(events: Iterable[Any]) -> list[dict]:
 
     ## surface 遮蔽必须跳(2026-09-21 实测踩到)
 
-    用户在 UI 上删消息走的是 `log.shadow()`(`server/store.py:345`)——
+    用户在 UI 上删消息走的是 `log.shadow()`(`server/store.py` 的
+    `delete_messages_from()`)——
     **日志原文一律留着**(日志即真相),只追加一条 `surface/shadow` 注解,
     由投影层跳过。所以这里也必须跳,否则后果不是"多一条结果",
     而是**把她删掉的话翻出来念给他听**。
@@ -89,10 +97,10 @@ def _turns(events: Iterable[Any]) -> list[dict]:
     所以跳过原文之后,`_turns` 的"后者覆盖前者"自然取到修正后的正文。
 
     ⚠️ **编辑/压缩留下的"替身消息"必须锚回原文的轮次**(2026-09-21 补)。
-       `update_message_content`(`server/store.py:350`)的形状是:
+       `update_message_content`(`server/store.py`)的形状是:
        遮蔽原文 + 追加一条 `source="user-edit"` 且带 `replaces={start,end}` 的消息,
        而那条追加消息**不带 turn**。投影层是靠 `replaces.start` 把它摆回原文位置的
-       (`core/session_log.py:431-434`)。
+       (`core/session_log.py` 的 `derive_messages()` 里 `anchor = replaces["start"]` 那一行)。
        不锚回去的后果:**原文被遮蔽、替身因为没有 turn 被丢掉** → 那一半记忆
        凭空消失,而且**看不出来**(行还在,只是少了一边)。
        —— 只"过滤掉 replace 标记"是不够的:过滤只会让它继续消失。
@@ -154,8 +162,6 @@ def rows_from_events(events: Iterable[Any], *, strip_prefix: str = "") -> list[M
     strip_prefix:传内容层那个标记模板时,会把**被模型抄进正文**的那行剥掉
     (见 `core.session_log.strip_copied_prefix`)—— 脏数据在日志里,治在读侧。
     """
-    from .session_log import strip_copied_prefix
-
     rows: list[MemoryRow] = []
     for t in _turns(events):
         if t["source"] == "self" and t["assistant"]:
@@ -232,10 +238,46 @@ def _dot(a: Any, b: Any) -> float:
 
     `None` = "这条还没向量"(缓存里 `vec IS NULL`,见 core/memory_cache.py)——
     算 0,不代表不相关,只代表**还不知道**。
+
+    ⏸ **占位标注:下面"一侧 dict、一侧 list"那个分支是静默错链,没有改。**
+    (2026-09 清理时如实标注。改判据会让"混合库"的行为**可见变化**,属产品决策。)
+
+    ① 现状:一侧稠密 `list`、一侧稀疏 `dict` 时**直接返回 0.0** ——
+       不报错、不降级、不留痕。于是这条记忆在这一问里拿到的余弦是 0,
+       它**看起来像"语义上不相干"**,而真相是"两边根本不是同一种向量,没法比"。
+       更坏的是 `has_semantic_route` 只看 `any(v is not None for v in self._vecs)`,
+       仍然会宣称"语义路可用" —— 于是一整个混合库会被静默按 0 分排序。
+    ② 生产为什么到现在没爆:类型不匹配**不可能**发生。写侧只有两条路
+       (`memory_cache._pack`):稠密 = BGE 的 `list[float]` → `vec_kind='dense'`,
+       稀疏 = lab 那个 bigram 占位 embedder 的 `dict` → `'sparse'`;而 `None`
+       表示"还没补"。dict 只出现在 **lab 的 bigram embedder**
+       (`test/recall_probe.py` 的 `BigramEmbedder`),产品装配的
+       `embed_mod.get_embedder()` 只会给 BGE 或 None。所以现状是
+       "只可能是 `list[float]` 或 `None`",那个分支是**死路**,但它是个
+       "看起来像正常兜底"的死路 —— 所以这里写响一点。
+    ③ 什么时候会动:**真出现"换嵌入器"留下的缓存**(同一个 cache 文件里
+       既有 BGE 的 list 又有别的嵌入器的 dict),或有人把 lab 的 bigram
+       混进产品。那一刻静默 0 会变成"她记性突然变差"且查不出原因。
+    ④ **手术位置(三处要一起动,缺一不可)**:
+       (a) 本函数这个分支(`if not isinstance(a, dict) or not isinstance(b, dict): return 0.0`)
+           —— 改成:要么显式降级(返回 None 让上层知道"没法比"),
+           要么按 kind 分派(同 kind 才算);
+       (b) `memory_cache.load()` —— 它就是"读侧把 kind 丢掉"的那一行:
+           SELECT 已经取回 `vec_kind`(变量 `vk`),但只传给 `_unpack`,
+           **不往后传**(返回的只有 `rows` + `vecs`)。要把 kind 传出来
+           (改返回形状或让 `MemoryRow` 带字段),`_dot` 才**有** kind 可判;
+       (c) `MemoryIndex.has_semantic_route` —— 它的判据
+           (`any(v is not None)`)必须一起收紧成"至少有一条**可用**向量",
+           否则它会继续为一个全是 dict 的库宣称语义路可用。
+       ⚠️ 三处是**同一条链**,只改 (a) 不改 (b)(c) 等于没改。
     """
     if a is None or b is None:
         return 0.0
     if isinstance(a, dict) or isinstance(b, dict):
+        # ⚠️ 走到这里说明**两侧类型不一致**(一侧稠密一侧稀疏)→ 返回 0.0。
+        #    **这不是"正常兜底",是一个静默错**:它们是两种不同的向量空间,
+        #    点积没有意义,返回 0 会把"没法比"伪装成"不相干"。留着是因为
+        #    生产不可能产出这种组合(见 docstring ②),完整的手术位置见 docstring ④。
         if not isinstance(a, dict) or not isinstance(b, dict):
             return 0.0
         if len(a) > len(b):
@@ -288,6 +330,12 @@ class MemoryIndex:
 
         给工具判"语义路塌了没"用 —— 塌了就退时间序并老实说 degraded,
         而不是**悄无声息地只剩关键词**(那样她只会觉得"她记性变差")。
+
+        ⚠️ 判据偏粗:它只看"有没有向量",**看不见 kind** —— 一个全是
+        `dict`(稀疏)向量的库也会被它判成"语义路可用",而 `_dot` 在那种库里
+        交叉相乘只会返回 0.0(见 `_dot` 的 docstring ①②)。
+        要收紧它请连着 `_dot` 的分支与 `memory_cache.load()` 一起动
+        (完整手术位置写在 `_dot` 的 docstring ④);**现在不要动**。
         """
         return self.embedder is not None and any(v is not None for v in self._vecs)
 
@@ -335,6 +383,39 @@ class MemoryIndex:
 
         ⚠️ 不能拿 `search(limit=1)` 的结果 —— 那是**融合分**第一的那条,
            它的余弦未必最高(实测两路排序不一致是常态)。
+
+        ⏸ **占位:docstring 自称"闸门专用",而产品路径零调用 —— 真闸门
+        恰恰是它警告的那种写法,且产品已决定不接。**(2026-09 清理时如实标注,
+        不接线不删。)
+
+        ① 现状:产品路径**零调用**(`grep` 全仓;读它的只有
+           `test/test_memory.py` 的两个用例 —— 其中
+           `test_top_cos_is_max_cosine_over_all_rows_not_the_fusion_winner`
+           就是在钉"它和 `search` 第一名的余弦不是一回事"这条差别 ——
+           外加 `test/test_memory_cache.py` 一条)。
+           本模块头写着"⛔ **闸门("确实没有")不用融合分** …… 只有 dense 余弦
+           是可标定的那一个",而**产品里真正在当闸门用的是另一条路**:
+           `character/tools.py` 的 `_FLOOR = 0.25` 与 `_GREY_TOP = 0.45`
+           —— 那套是**实测过、结论是负提升、明确不接线的**(见那里的注释)。
+           也就是说:本函数的**语义**是对的,产品只是**决定不要这道闸门**。
+        ② 为什么留着:它是将来真开闸门时**唯一的现成实现**,而且它把那个
+           最容易踩的坑写进了 docstring(拿融合分第一名的余弦当闸门 = 错)。
+           删掉它,下一个想做闸门的人极可能就按 `search(limit=1)` 写一遍 ——
+           这正是本仓库最想避免的那类静默错。
+        ③ 什么条件才启用:产品决定**重新评估相似度闸门**(`_FLOOR` 那条
+           "测过、负提升、别接"的结论被新语料/新嵌入器推翻)时。
+           那一刻的接线口在 `character/tools.py` 的 recall 工具,
+           而不是本模块 —— 本函数只负责"给出可标定的那个数"。
+        ④ 将来手术要删哪几行:本函数整个(签名 + docstring + 取 qv/求 max 的
+           那几行,共约 16 行代码)。
+           连带改:`test/test_memory.py` 的
+           `test_top_cos_is_max_cosine_over_all_rows_not_the_fusion_winner`
+           与那条 `assert idx.top_cos("随便") == 0.0`(含文件末尾的
+           用例清单登记),以及 `test/test_memory_cache.py` 里那条
+           `idx.top_cos("随便") == 0.0`。
+           ⚠️ `Hit.cos` 字段(`test/test_memory.py` 的 `test_top_cos_is_max_cosine_over_all_rows_not_the_fusion_winner`)和 `search` 里填 `cos=` 的那一行**别一起删**:
+           它们是"融合分排序 / 余弦判有没有"这条设计的另一半,而且
+           `cos` 不只为闸门存在(排障要看)。
         """
         idx = [i for i, r in enumerate(self.rows)
                if scope in (None, "all") or r.kind == scope]

@@ -266,7 +266,7 @@ def test_usage_reaches_SYSTEM_through_the_composer():
       description -> 进 tools[] schema,教"调用格式"
       usage       -> 经 make_usage_section 进 SYSTEM,教"怎么用得好"
 
-    而 `core/composer.py:120` 的 make_usage_section 只读 **Tool 上**的 usage。
+    而 `core/composer.py` 的 `make_usage_section()` 只读 **Tool 上**的 usage。
     我搬过来时先漏挂了一次 —— 漏了**不会报错**,SYSTEM 里就是没有这段,
     症状是触发率与参数合规率一起掉,看不出来是接线问题。
     """

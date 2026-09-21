@@ -76,25 +76,44 @@ class AgentLoop:
         self.system_prompt = system_prompt
         self._builder_arity = _builder_arity(system_prompt)
         self.max_steps = max_steps
-        self.on_chunk = on_chunk  # 可观测性钩子:每个 chunk 回调(如终端打字)
+        # on_chunk = **流式投递口**,不是调试钩子。
+        # 它是把 chunk 实时送去产品传输层(SSE)的那条路:`server/app/engine.py`
+        # 每请求一个回调,多客户端互不串流(见 run_turn 的 on_chunk 参数)。
+        # ⚠️ 所以**别把它当"可观测性钩子(如终端打字)"删掉,也别往里加打印** ——
+        #    本内核不为显示/调试加钩子(用户拍过的硬边界)。要打印/追踪,
+        #    在 lab 层包代理,项目里现成的代理是 `server/app/engine.py` 的
+        #    `_TracingLLM`(它包住 LLM,不碰内核)。
+        self.on_chunk = on_chunk
         # fold_tool_traces:跨轮折叠工具痕迹(视图)。日志原文不动;
         # retain_result=True 的工具痕迹仍保留。默认 False = 忠实回放(业界主流)。
         self.fold_tool_traces = fold_tool_traces
-        self._retained: set[str] = set()
-        for name in tools.names():
-            tool = tools.get(name)
-            if tool is not None and tool.retain_result:
-                self._retained.add(tool.name)
+        # 构造期**快照**:这一刻哪些工具声明了 retain_result 跨轮保真。
+        # ⚠️ 隐藏前提 —— 构造之后**新注册的工具不进这个集合**:
+        #    这里只扫一遍注册表就定稿,不会跟着 registry 变化走。当前没问题,
+        #    因为 `engine` 在 **import 期**就把工具全部注册完(_build_engine
+        #    只做连接与参数的装配),构造 AgentLoop 时注册表已经齐了。
+        #    但如果将来有"运行期动态注册工具"的用法,这一份快照会**静默漏掉**
+        #    新工具 —— 症状是它明明声明了 retain_result,痕迹却照旧被折叠。
+        #    那时要么改成每次现算,要么在注册处同步这份集合。
+        self._retained: set[str] = {
+            n for n in tools.names()
+            if (t := tools.get(n)) is not None and t.retain_result
+        }
         self._last_finish: str | None = None
         # 同一时刻只跑一个 turn(VISION 决策 7):角色一次只能做一件事,
         # 用户消息来了若后台轮还在跑,她"正在忙"是合理设定。
         self._turn_lock = threading.Lock()
 
     # ---------- 对外入口 ----------
-
-    def is_busy(self) -> bool:
-        """此刻是否正在跑一轮(供 UI 显示"她在忙")。"""
-        return self._turn_lock.locked()
+    # (2026-09 清理:原来这里有一个 `is_busy()` —— `return self._turn_lock.locked()`,
+    #  docstring 写着"供 UI 显示'她在忙'"。**全仓零引用**(`grep -E '\.is_busy'` 0 命中;
+    #  `is_busy` 那 10 处命中里 9 处是 `turn_is_busy` 这个**子串**)。
+    #
+    #  ⚠️ 产品 UI 的忙判定根本不是这把锁:它在 `server/app/engine.py` 的
+    #  `turn_is_busy()`,看的是 **turn 队列**(`_turn_busy` 事件 + `_turn_queue.qsize()`)
+    #  —— 排队中还没轮到也算忙。而 `_turn_lock` 只表示"此刻有一轮正走在 with 里",
+    #  两者语义不同(队列有积压时锁可以是空的)。内核这把锁不是那个语义,
+    #  别再照 `is_busy` 的名字去理解它。)
 
     def run_turn(
         self,

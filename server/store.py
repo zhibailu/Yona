@@ -40,6 +40,10 @@ def _fmt_time(ts: float) -> str:
 
     UI 显示用 (created_at).slice(-5) 切出 "HH:MM";若带秒会切成 "MM:SS",
     造成 "22:37" 看起来像 22 点(实际是 11:22:37 的分秒)。
+
+    ⚠️ 同一份契约还有第二份逐字实现:`server/app/api/view.py:_fmt_time`。
+    两份都没对外导出(下划线私有),跨模块 import 私有名在本仓没有先例,
+    所以没做复用 —— **改这里必须改那边**(改法是并成一处,见该处注释)。
     """
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
 
@@ -129,7 +133,9 @@ class SessionStore:
 
     def list_sessions(self) -> list[dict]:
         """全部卡片目录;Yona(flagship)永远第一,其余按 updated_at 倒序。"""
-        self.ensure_flagship()
+        # 保底:没有旗舰就地建一张空 Yona(原来包在 ensure_flagship 里,那层
+        # 只是 return self.flagship_session_id() 的转发,已删)
+        self.flagship_session_id()
         out = []
         for meta_file in sorted(self.sessions_dir.glob("*/meta.json")):
             try:
@@ -141,10 +147,10 @@ class SessionStore:
             log = self._load_log(meta["id"])
             meta["message_count"] = len(log.derive_messages())
             out.append(meta)
-        out.sort(key=lambda m: (not m.get("flagship", False),
-                                _now_iso_sortable(m.get("updated_at", ""))),
-                 reverse=False)
-        # 上面按元组升序会让旗舰排最前(false<true? 不对) —— 换成显式稳定排序
+        # 顺序 = 旗舰第一,其余 updated_at 降序。**就这两段稳定排序,别再加第三段**
+        # (原来这三段里的第一段按 (not flagship, _now_iso_sortable(updated_at)) 升序,
+        #  结果被下面两段完全覆盖 —— 是死排序;它调的 _now_iso_sortable 是返回入参
+        #  原值的恒等函数,已一并删)
         out.sort(key=lambda m: m.get("updated_at", ""), reverse=True)
         out.sort(key=lambda m: 0 if m.get("flagship") else 1)
         return out
@@ -176,9 +182,6 @@ class SessionStore:
             if meta.get("flagship"):
                 return meta["id"]
         return self.create_session(FLAGSHIP_TITLE, flagship=True)
-
-    def ensure_flagship(self) -> str:
-        return self.flagship_session_id()  # noqa: RET504 名字表意:没有就建
 
     def life_target_session_id(self) -> str:
         """心跳/补写/脉冲写给哪张卡 = 最近激活(最近有人聊过的卡),没有 = Yona。
@@ -277,7 +280,12 @@ class SessionStore:
             e.data["turn"] for e in log.events if e.type == "turn/start"
             and e.data.get("source") == "self"
         }
-        anchored: list[tuple[int, int, int, str, str]] = []
+        # 中间元组的末位带上 e.time(**不是**再回查日志):
+        # 原来 created_at 靠 self._created_at_of(session_id, seq),那条每调一次
+        # 就 self._load_log(session_id) 一次 —— 整份 chat.log 重读 + 重解析。
+        # 一条 200 消息的卡 = 201 次全量读盘(O(N²));而时间就在这条事件身上。
+        # 见 docs/pitfalls/HISTORY.md(load_log 无缓存)。_created_at_of 已删。
+        anchored: list[tuple[int, int, int, str, str, float]] = []
         order = 0
         for e in log.events:
             if e.seq in shadowed:
@@ -297,7 +305,7 @@ class SessionStore:
                 if not text.strip():
                     continue
                 order += 1
-                anchored.append((anchor, order, e.seq, "user", text))
+                anchored.append((anchor, order, e.seq, "user", text, e.time))
             elif e.type == "assistant/message":
                 if turn in self_turns:
                     continue  # 卡片独处的生活事件不进聊天流(内心面板看)
@@ -305,24 +313,18 @@ class SessionStore:
                 if not text.strip():
                     continue
                 order += 1
-                anchored.append((anchor, order, e.seq, "assistant", text))
+                anchored.append((anchor, order, e.seq, "assistant", text, e.time))
         anchored.sort(key=lambda item: (item[0], item[1]))
         return [
             {
                 "id": seq,
                 "role": role,
                 "content": text,
-                "created_at": self._created_at_of(session_id, seq),
+                "created_at": _fmt_time(ts),
                 "session_id": session_id,
             }
-            for _, _, seq, role, text in anchored
+            for _, _, seq, role, text, ts in anchored
         ]
-
-    def _created_at_of(self, session_id: str, seq: int) -> str:
-        for e in self._load_log(session_id).events:
-            if e.seq == seq:
-                return _fmt_time(e.time)
-        return _now_iso()
 
     def get_messages(self, session_id: str, id_from: int | None = None) -> list[dict]:
         msgs = self._messages_view(session_id)
@@ -413,13 +415,14 @@ class SessionStore:
             self._write_meta(session_id, meta)
 
 
-def _now_iso_sortable(updated_at: str) -> str:
-    """留作排序备用(实际排序见 list_sessions 的稳定双排序)。"""
-    return updated_at
-
-
 def _blocks_text(content) -> str:
-    """消息块列表 → 纯文本(UI 契约是字符串 content)。"""
+    """消息块列表 → 纯文本(UI 契约是字符串 content)。
+
+    ⚠️ 同一语义还有第二份**逐字相同**的实现:`server/app/api/view.py:_text_of`
+    (另外 core/memory.py、core/openai_compat.py、turn_lab.py、
+    prompt_lab/tool_recall.py 各有细节不同的变体)。上面 _fmt_time 的理由在这里
+    同样成立 —— **改一处要改另一处**。
+    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):

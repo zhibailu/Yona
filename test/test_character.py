@@ -132,7 +132,7 @@ def test_launch_subagent_receipt_drops_none_but_keeps_zero():
 
 
 def test_launch_subagent_retains_result_across_turns():
-    """派活是一次性的,重查不了 —— 结果必须跨轮保真(core/tools.py:17-19)。"""
+    """派活是一次性的,重查不了 —— 结果必须跨轮保真(core/tools.py 的 `Tool.retain_result` 字段)。"""
     assert make_launch_subagent_tool(lambda t, l: {}).retain_result is True
 
 

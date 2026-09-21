@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import time
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -56,17 +55,37 @@ app.include_router(media.router)
 app.include_router(config.router)
 
 
+# 2026-09 清理:原来这里有 `from pathlib import Path` —— 全文件零引用(路径拼接
+# 都走 engine.ROOT / StaticFiles),已删。若哪天要在这里拼路径,记得 import 回来。
+
+
 # 基础:健康 / 设置 / 模型 / 上下文配置
 
 @app.get("/health")
 async def health():
+    """运维探活(容器/反代/部署脚本用,不看业务状态)。
+
+    ⚠ 全仓**零调用**(2026-09 清理时标注,grep `/health` 只剩本行与 docstring
+      里那处列举):静态 UI 不调它、测试不调它。**留着**是因为探活端点是部署面
+      的公开契约(仓库外可能有监控在打),删掉会让外部探活 404;它没有状态、
+      没有依赖,留着零成本。将来手术:确认没有外部消费者之后连这段一起删。
+    """
     return {"status": "ok", "service": "yona-rewrite"}
 
 
 @app.get("/models")
 async def list_models():
-    # 2026-09 连接管理:只列"当前连接端点真正可用"的模型(引擎快照,
-    # 由连接向导实测拉通后缓存);未连接 = 空列表,UI 显示首启引导。
+    """列"当前连接端点真正可用"的模型(引擎快照)。⏳ UI 已不再调它。
+
+    ⚠ 被 `/settings` 取代(2026-09 清理时标注,**不删**):UI 的模型下拉走
+      `GET /settings` 的 `models` 字段(static/app-core.js 的 `loadModels()`),
+      不是这个端点。保留原因是它是**公开 API**,可能有仓库外消费者(脚本/探针),
+      删掉等于对外改契约。将来手术:确认无外部消费者再删,同时把 main.py 头部的
+      端点族列举(文件头 docstring "配置:settings/models/context-sources")一起改。
+
+    2026-09 连接管理:只列"当前连接端点真正可用"的模型(引擎快照,
+    由连接向导实测拉通后缓存);未连接 = 空列表,UI 显示首启引导。
+    """
     state = engine.llm_state()
     return [
         {"id": m, "name": m, "description": "可用模型"} for m in state["models"]
@@ -150,7 +169,21 @@ class SessionSettingsIn(BaseModel):
 
 
 def _clean_settings(raw: dict) -> dict:
-    """白名单 + 类型/范围校验(脏字段静默丢弃,非法值 400)。"""
+    """白名单 + 类型/范围校验(脏字段静默丢弃,非法值 400)。
+
+    ⚠ 下面有三条**硬编码的产品边界,绕过了 server/params.py**(2026-09 清理时标注,
+      行为一个字节没动 —— 搬它们要改 server/params.py,不在本次授权范围内):
+        * `if not 0.0 <= t <= 2.0`    温度上限 2.0
+        * `if not 0 <= r <= 40`       上下文轮数上限 40(0 = 不限制,合法)
+        * `len(sp) > 4000`            人设覆盖串长度上限 4000
+      为什么算"漏网":产品语义参数的唯一来源是 server/params.py(见该文件表头),
+      而这三条只活在这个 router 里 —— 改的时候两边互不知道,漂移了也没有人喊。
+      ⚠ 尤其 40 与 params 的 DEFAULT_CONTEXT_ROUNDS(server/params.py 的 `DEFAULT_CONTEXT_ROUNDS` = 20)
+      是**两条线**:默认 20、可填到 40,别把两者当同一个值。
+      将来手术:params.py 加三条(如 LLM_MAX_TEMPERATURE / CONTEXT_MAX_ROUNDS /
+      SYSTEM_PROMPT_MAX_LEN),这里改成引用它们;错误文案里的 "0-2" / "0-40" 也要
+      跟着改成插值,否则文案与真边界会分叉。
+    """
     clean: dict = {}
     t = raw.get("temperature")
     if t is not None:
@@ -228,9 +261,21 @@ async def delete_messages_from(from_id: int, session_id: str | None = None):
         "deleted": True,
         "session_id": session_id,
         "deleted_messages": deleted,
+        # ⚠ **占位字段,恒 0**(2026-09 清理时保留并标注):`deleted_objects` **前端在读**
+        #    —— static/app-messages.js 三处
+        #    `if (data.deleted_objects) showSystem(`已收走 ... 个绑定产物。`)`。
+        #    事实:本次删除只做 shadow tail-cut(server/store.py 的
+        #    `delete_messages_from`,只 shadow 日志事件 + 存盘),**一个产物都没回收**,
+        #    所以这里只能是 0,前端那句提示永远不会响。产物层(绑定的 objects)在
+        #    当前实现里是冻结区。
+        #    接回那天:store 真回收产物之后这里换成实际回收数。
+        #    ⚠ 删它要**同时**改前端那三行 —— 否则前端读到 undefined,`if` 分支静默
+        #    不变(不报错、不显形),最容易埋成"以后没人记得这里缺一块"。
         "deleted_objects": 0,
-        "deleted_actions": 0,
-        "deleted_sensory": 0,
+        # 2026-09 清理:**已删** `deleted_actions` / `deleted_sensory` 两个字段。
+        #    判据:grep 全仓各只命中**本处那一行**(定义即唯一出现),永远 0;前端三处
+        #    只读 `deleted_objects`(见上),没有任何消费方。留着会让人误以为
+        #    "动作/感官产物真的在回收"。
     }
 
 
@@ -261,6 +306,20 @@ async def pulse_autonomy():
     """手动触发一次自走轮:她独处想/做一轮,写给"最近激活的卡"(Yona 兜底)。
 
     2026-09 每卡 life:不再有匿名生活会话 —— 目标卡 = store.life_target。
+
+    ⚠ 三个**自走入口**必须都做同样两件事(2026-09 清理时对齐,**行为变更**):
+        self 心跳自走 = engine.LifeLoop.run_turn(engine.py 的 `mark_self()` 调用)
+        离线补写      = engine._maybe_backfill_life._card_job(engine.py)
+        手动脉冲      = 本函数(下面 _job)
+      两件事:(a) `_submit_turn(..., sid=sid)` —— 告诉 worker"这一项是哪张卡";
+             (b) 跑完 `mark_self()` —— 让这一轮进心跳冷却。
+      **少 (a) 的症状**(就是本端点在 2026-09 清理前的老毛病):worker 里
+      `_recall_sid["sid"]` = None → `recall_index()`(engine.py 直接
+      `if sid is None ... return None`)回 None → recall 工具给模型的事实是
+      "检索没跑起来",于是**她会开口说自己一时想不起来**,而真相只是引擎不知道
+      翻哪张卡;同时 worker 的 `if sid is not None`(engine.py)跳过
+      memory_sync,脉冲产出的生活事件不进索引(下一次也检索不到)。
+      **少 (b) 的症状**:脉冲跑完不进冷却 → 心跳会在几秒后再自走一轮,节奏衔接断。
     """
     if engine._loop is None:
         raise HTTPException(status_code=503, detail="引擎未启动")
@@ -286,12 +345,23 @@ async def pulse_autonomy():
                                if snap.get("system_prompt") else None),
             )
             engine._store.save_log(sid, log)
+            # 真跑了一轮 → 进心跳冷却(2026-09 清理补上,与 LifeLoop / 补写同款)。
+            # 判空是必须的:_life_gate 只在 _start_heartbeat 里赋值,引擎未起心跳时
+            # (测试、UI 只连了连接没起心跳)它是 None —— 这里不该因此炸掉脉冲。
+            # 注意"安静结束"那条 return False 在上面**早退**,不进冷却(正确:
+            # 什么都没发生就不该占冷却,心跳从同一锚继续等下一件事件)。
+            if engine._life_gate is not None:
+                engine._life_gate.mark_self()
             return True
         finally:
             engine.end_self_wake()
 
     try:
-        ran = engine._submit_turn(_job, priority=engine._QUEUE_SELF)
+        # sid=sid **必须给**(2026-09 清理补上,行为变更):见本函数 docstring ——
+        # 少了它,recall 会翻不到卡、本轮记忆也不进索引。另外三个提交点都传了:
+        # server/app/api/chat.py(user 轮的 `_submit_turn`)、
+        # engine.py 的 `LifeLoop`(自走轮)、engine.py 的 `_maybe_backfill_life._run()`(离线补写)。
+        ran = engine._submit_turn(_job, priority=engine._QUEUE_SELF, sid=sid)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=500, detail=f"Autonomy pulse failed: {exc}"

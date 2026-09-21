@@ -185,7 +185,7 @@ def test_no_embedder_degrades_to_sparse_only():
 def test_shadowed_messages_never_become_memory_rows():
     """用户删掉的话**不许**进记忆 —— 日志原文留着,投影必须跳过。
 
-    删除走的是 `log.shadow()`(`server/store.py:345`):原文一个字不动,
+    删除走的是 `log.shadow()`(`server/store.py` 的 `delete_messages_from()`):原文一个字不动,
     只追加一条 `surface/shadow` 注解。不跳过的后果不是"多一条结果",
     而是**把她删掉的话翻出来念给他听**。
     """

@@ -45,7 +45,7 @@ CHAT_SITUATION = "【情境】主人正在跟你说话。"
 def make_product_builder(hits: list) -> object:
     """模拟 server/app/engine.py 的 sys_by_source 形状(三参 builder,按 source 选情境)。
 
-    真实实现见 engine.py:547。**它唯一的缺陷是:认不出"工人轮"** ——
+    真实实现见 server/app/engine.py 的 `_build_engine()` 里那个 `sys_by_source(...)` builder。**它唯一的缺陷是:认不出"工人轮"** ——
     source 不是 "self" 就一律当陪聊轮,发人格。这不是 bug,
     因为它当初只为"同一个她的三种轮"(陪聊/自走/补写)写的。
     hits 记录它被谁问过,用来证明覆盖路径真的绕开了它。
@@ -73,7 +73,7 @@ def make_launch_tool(func) -> Tool:
             "required": ["task"],
         },
         func=func,
-        # core/tools.py:17-19:「True = 已结束轮次里也保留本工具的痕迹
+        # core/tools.py 的 `Tool.retain_result` 字段:「True = 已结束轮次里也保留本工具的痕迹
         # (适合 subagent 委派、不可重查的查询)」—— 血缘必须在视图里活下来。
         retain_result=True,
     )
@@ -149,8 +149,8 @@ def test_same_instance_inside_a_tool_deadlocks() -> None:
     """反例:同一个 loop 实例在工具里再跑一轮 = 永久卡死。
 
     这不是洁癖,是硬约束:
-      core/loop.py:82   self._turn_lock = threading.Lock()   # 不可重入
-      core/loop.py:133  with self._turn_lock: ...            # 整个 turn 都在锁里
+      core/loop.py  AgentLoop.__init__:  self._turn_lock = threading.Lock()   # 不可重入
+      core/loop.py  run_turn():          with self._turn_lock: ...            # 整个 turn 都在锁里
     工具执行发生在 run_turn 的 with 块内,所以"父的工具体里调父自己的
     run_turn"在类型上就是死的 —— 只有换实例一条路。
 
@@ -203,7 +203,7 @@ def test_persona_leaks_unless_the_subrun_overrides_system() -> None:
     是个很顺手的写法(毕竟 sys_by_source 就是"这具装配的 SYSTEM")——
     但子运行会因此**穿着小夜子的人设去干活**,而它本该是个匿名执行单元。
 
-    正解:每轮显式传 system_prompt= 任务书(core/loop.py:251 的覆盖路径),
+    正解:每轮显式传 system_prompt= 任务书(core/loop.py 的 `_build_messages()` 里 `if system_prompt is not None:` 那条覆盖路径),
     builder 根本不参与。
     """
     hits: list = []
@@ -232,7 +232,8 @@ def test_persona_leaks_unless_the_subrun_overrides_system() -> None:
 
 
 def test_subrun_turn_is_indistinguishable_from_a_chat_turn() -> None:
-    """现状记录:子运行的 turn/start 记的是 source="user"(core/subrun.py:254)。
+    """现状记录:子运行的 turn/start 记的是 source="user"(core/subrun.py 的 `execute()` 里
+    `loop.run_turn(spec.task, source="user", ...)` 那行)。
 
     意思是**主日志里"工人轮"和"真人聊天轮"长得一模一样** ——
     与 TOOL_VISIBILITY.md §3 那个"自走与补写撞在 source='self' 上"是同一类问题,
@@ -250,7 +251,7 @@ def test_subrun_turn_is_indistinguishable_from_a_chat_turn() -> None:
 
 
 def test_registering_into_the_persistent_registry_breaks_on_rebuild() -> None:
-    """产品那份 registry 是 **module 级单例**(engine.py:72),而 _build_engine 会重跑
+    """产品那份 registry 是 **module 级单例**(engine.py 的 `_tools = ToolRegistry(...)`),而 _build_engine 会重跑
     (换连接 / 重载)。所以"在 _build_engine 里 register 一次"是错的:
     第二次就 ValueError,而且它挂在**换连接**这条路上 —— 用户看不见的炸法。
 
@@ -269,7 +270,7 @@ def test_registering_into_the_persistent_registry_breaks_on_rebuild() -> None:
         naive_build("llm-B")
     except ValueError as exc:
         failure = str(exc)
-    assert "已注册" in failure, failure   # core/tools.py:48
+    assert "已注册" in failure, failure   # core/tools.py 的 ToolRegistry.register()
 
     # 安全形状:注册一次,句柄晚绑定
     safe = ToolRegistry([])
@@ -285,7 +286,7 @@ def test_registering_into_the_persistent_registry_breaks_on_rebuild() -> None:
 
 
 def test_retain_is_snapshotted_when_the_loop_is_built() -> None:
-    """retain_result 的收集发生在 **AgentLoop 构造时**(loop.py:75-78),之后不刷新。
+    """retain_result 的收集发生在 **AgentLoop 构造时**(core/loop.py 的 `AgentLoop.__init__` 里 `self._retained` 快照),之后不刷新。
 
     效果:晚注册进 registry 的 launch_subagent 不在 _retained 里,
     它的 tool/result 会在后续轮的折叠视图里被折掉 —— 血缘从**视图**消失

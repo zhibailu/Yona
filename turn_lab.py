@@ -136,42 +136,60 @@ def _tail_time(log) -> float | None:
     return log.events[-1].time
 
 
-def _parse_fake(text: str) -> float | None:
-    """解析假冒时间 → epoch;解析失败/空打印提示并返回 None。
+def _parse_ts(text: str, *, base: float | None = None,
+              relative: bool = False) -> float | None:
+    """解析时间输入 → epoch;空输入/认不出的格式打印提示并返回 None。
 
-    支持:
-      HH:MM          今天(当前虚拟日,默认不跨天)
-      MM-DD HH:MM    今年某天(可跨天)
-      YYYY-MM-DD HH:MM  绝对(可跨年)
-      +90m / +2h / +3d  相对当前虚拟时刻往后拨(注入"间隔"的快捷写法)
+    ⚠️ 这是**一个**函数服务两处调用,而两处的口径不同 —— 靠下面两个开关区分。
+    合并前是 `_parse_fake`(虚拟钟 + 相对量)与 `_parse_ts`(墙钟 + 无相对量)
+    两个函数,三者里有 90% 逐字重复(同样三种 strptime 格式、同样 `%H:%M`
+    补年月日、同样 `%m-%d` 补年),只有这两处差异。
+
+    认的格式(两处完全一样):
+      HH:MM              基准日的那个时刻
+      MM-DD HH:MM        基准年内的某天(可跨天)
+      YYYY-MM-DD HH:MM   绝对时刻(可跨年)
+    只有 `relative=True` 时额外认:
+      +90m / +2h / +3d   相对基准时刻往后拨
+
+    两处调用各自的口径(**不许合并掉,合并了就改行为**):
+      · `_inject_time`(菜单 v / 自走轮前)—— `base=_vnow()`, `relative=True`。
+        基准是**虚拟钟**:这里问的是"台上假装的现在往后拨多久",
+        `+2h` 必须是"虚拟现在 + 2 小时"而不是"墙钟 + 2 小时";
+        拨完 `_inject_time` 再拿它反算 `_clock_offset`。
+      · `_run_backfill`(菜单 b 的窗口两端)—— 都不传,即
+        `base=time.time()`(墙钟)、`relative=False`。
+        那里输入的是**真实**的"昨天 20:00",和台上的虚拟钟无关;
+        两端也必须是绝对时刻,相对量在"窗口起点/终点"上没意义。
     """
     text = text.strip()
     if not text:
         return None
-    vnow = _vnow()
-    # 相对注入:+N m/h/d
-    rel = text[1:] if text.startswith("+") else ""
-    if text.startswith("+") and len(rel) >= 2 and rel[-1] in "mhd":
-        try:
-            n = float(rel[:-1])
-        except ValueError:
-            n = -1.0
-        unit = {"m": 60.0, "h": 3600.0, "d": 86400.0}[rel[-1]]
-        if n > 0:
-            return vnow + n * unit
-    vdt = datetime.fromtimestamp(vnow)
+    now = time.time() if base is None else float(base)
+    # 相对注入:+N m/h/d(只在 relative=True 时认)
+    if relative and text.startswith("+"):
+        rel = text[1:]
+        if len(rel) >= 2 and rel[-1] in "mhd":
+            try:
+                n = float(rel[:-1])
+            except ValueError:
+                n = -1.0
+            unit = {"m": 60.0, "h": 3600.0, "d": 86400.0}[rel[-1]]
+            if n > 0:
+                return now + n * unit
+    now_dt = datetime.fromtimestamp(now)
     for fmt in ("%Y-%m-%d %H:%M", "%m-%d %H:%M", "%H:%M"):
         try:
             dt = datetime.strptime(text, fmt)
             if fmt == "%H:%M":
-                dt = dt.replace(year=vdt.year, month=vdt.month, day=vdt.day)
+                dt = dt.replace(year=now_dt.year, month=now_dt.month, day=now_dt.day)
             elif fmt == "%m-%d %H:%M":
-                dt = dt.replace(year=vdt.year)
+                dt = dt.replace(year=now_dt.year)
             return dt.timestamp()
         except ValueError:
             continue
-    print("时间格式没看懂,示例: 11:30(今天)/ +2h(相对)/ 09-08 09:00 / "
-          "2026-09-08 09:00")
+    print("时间格式没看懂,示例: 11:30(今天)/ 09-08 09:00 / 2026-09-08 09:00"
+          + ("/ +2h(相对)" if relative else ""))
     return None
 
 
@@ -197,7 +215,7 @@ def _inject_time(log=None) -> None:
         _clock_offset = 0.0
         print("  → 已回真实墙钟")
         return
-    ts = _parse_fake(text)
+    ts = _parse_ts(text, base=_vnow(), relative=True)  # 虚拟钟 + 认相对量
     if ts is None:
         return
     _clock_offset = ts - time.time()
@@ -214,8 +232,8 @@ def _rebuild() -> None:
     eng._build_engine(_cfg)  # 装配进 eng._loop / eng._composers / eng._llm
 
 
-
-
+# ⚠ 与 prompt_lab/tool_recall.py 的 `_fmt_ts` **同源但不逐字**:这儿是
+#   `%m-%d %H:%M`(不带年份),那儿是 `%Y-%m-%d %H:%M`。改一处前先确认差异是否故意。
 def _fmt_ts(ts: float) -> str:
     return time.strftime("%m-%d %H:%M", time.localtime(ts))
 
@@ -231,29 +249,10 @@ def _human_gap(seconds: float) -> str:
     return f"{days} 天" + (f" {hours} 小时" if hours else "")
 
 
-def _parse_ts(text: str) -> float | None:
-    """解析时间输入:空=现在;HH:MM=今天;MM-DD HH:MM=今年;YYYY-MM-DD HH:MM。"""
-    text = text.strip()
-    if not text:
-        return None
-    now = time.time()
-    for fmt in ("%Y-%m-%d %H:%M", "%m-%d %H:%M", "%H:%M"):
-        try:
-            dt = datetime.strptime(text, fmt)
-            now_dt = datetime.fromtimestamp(now)
-            if fmt == "%H:%M":
-                dt = dt.replace(year=now_dt.year, month=now_dt.month, day=now_dt.day)
-            elif fmt == "%m-%d %H:%M":
-                dt = dt.replace(year=now_dt.year)
-            return dt.timestamp()
-        except ValueError:
-            continue
-    print("时间格式没看懂,示例: 23:30 / 09-06 23:30 / 2026-09-06 23:30")
-    return None
-
-
 # ---------- 展示(组件来自引擎真实 composer) ----------
 
+# ⚠ 与 prompt_lab/tool_recall.py 的 `_blocks_text` 是**同一件(逐字)** ——
+#   两处各有一份,改一处必须改另一处(故意没抽公共模块:不许新建顶层文件)。
 def _blocks_text(content) -> str:
     if isinstance(content, str):
         return content
@@ -266,7 +265,14 @@ def _blocks_text(content) -> str:
 
 
 def _print_system(source: str, log=None) -> None:
-    """SYSTEM 组件拆分 = 引擎真实 composer 的段(eng.system_component_sections)。"""
+    """SYSTEM 组件拆分 = 引擎真实 composer 的段(eng.system_component_sections)。
+
+    ⚠ 这个观测口固定读全局 `eng._tools`,**看不见本轮实际开放的子集**(产品侧
+    注释里点明了这是有意的:观测口答的是"完整装配起来长什么样")。所以补写回放
+    (`_run_backfill` 那轮传的是 `tools=empty_tools`)那一轮的 [可用工具用法] 段
+    其实**不会发出去**,这里却会照打出来 —— 打印比实际多。台子上要按本轮工具
+    逐段看,得走 `prompt_lab/tool_recall.py` 的 `sections()`(它自己传 registry)。
+    """
     log = log if log is not None else _log
     print("── SYSTEM(组件拆分,来自引擎真实装配)──")
     for name, text in eng.system_component_sections(source, log):
@@ -336,6 +342,8 @@ def _make_console_cb(log):
     return cb
 
 
+# ⚠ 与 prompt_lab/tool_recall.py 的 `_InputPrintProxy` 是**同一件(逐字)** ——
+#   两处各有一份,改一处必须改另一处(同上,不抽公共模块)。
 class _InputPrintProxy:
     """lab 侧 llm 代理:每次真实 LLM 调用前打印组件拆分 + messages(实际发送)。
 
@@ -368,8 +376,12 @@ class _InputPrintProxy:
 
 
 def _run_turn(source: str, user_input: str | None = None, self_note: str | None = None,
-              log=None) -> None:
+              log=None, tools=None) -> None:
     """用**引擎真实 loop**(eng._loop)跑一轮;LLM 报错只报一句不炸台。
+
+    tools: 本轮开放的工具子集(`ToolRegistry` 或 list);None = 引擎构造时的全量
+        (`run_turn(tools=...)` 语义,见内核 `core/loop.py` 的 run_turn 参数说明)。
+        **补写回放必须传空表** —— 理由与产品同款(下详)。
 
     虚拟时钟(2026-09):非补写回放时,先把引擎世界钟拨到 _vnow()、给 log 盖
     虚拟时间游标 —— 这轮的事件/生活事件时间戳都落在虚拟时刻,跑完撤掉(引擎回墙钟)。
@@ -481,6 +493,7 @@ def _run_turn(source: str, user_input: str | None = None, self_note: str | None 
                 user_input=user_input, source=source, log=log,
                 self_note=self_note, on_chunk=console_cb,
                 model=(_model or None), max_rounds=_max_rounds,
+                tools=tools,
             )
             console_cb.flush()  # 兜底:最后一步的工具内容若没被文字带到,这里补上
             print()
@@ -531,6 +544,15 @@ def _run_backfill() -> None:
         return
 
     from core.tools import ToolRegistry  # noqa: PLC0415
+    # ⚠ 补写回放**必须用空工具表**,这不是台子的发明而是产品的行为:
+    #   产品补写(`server/app/engine.py` 的 `_maybe_backfill_life`)里就是
+    #   `empty_tools = ToolRegistry([])` 然后
+    #   `loop.run_turn(source="self", log=card_log, tools=empty_tools, ...)`;
+    #   同文件 `_build_engine` 的说明写着理由 ——"那段日子怎么过的,**不该有实时工具**"。
+    #   (顺带:两个调用点取值不同是**有意的**,`sys_by_source` 收本轮真实注册表,
+    #    只读观测口 `system_component_sections` 固定收全局 `_tools`,别硬合并。)
+    #   改之前:这里造了 `empty_tools` 却从未使用,而 `_run_turn` 压根没有 tools 参数
+    #   → 补写回放**带着全套工具**在跑,与产品不一致(2026-09-22 修)。
     empty_tools = ToolRegistry([])
     for i, e in enumerate(events):
         if i == 0:
@@ -551,7 +573,7 @@ def _run_backfill() -> None:
         _log.set_time_cursor(e.start)
         eng._backfill_clock["ts"] = e.start   # 引擎补写 composer 的世界时钟
         try:
-            _run_turn("self", self_note=note, log=_log)
+            _run_turn("self", self_note=note, log=_log, tools=empty_tools)
         finally:
             _log.clear_time_cursor()
             eng._backfill_clock["ts"] = 0.0

@@ -184,14 +184,14 @@ LAUNCH_VARIANTS: dict[str, dict] = {
 # 同一条规矩,三个落点,生效范围不一样:
 #   none     什么都不加(基线)
 #   tool     放 launch_subagent 的 usage —— 只在**有工具的轮**生效
-#   persona  放 PERSONA 的动作纪律 —— **所有轮共用**(character/persona.py:62
+#   persona  放 PERSONA 的动作纪律 —— **所有轮共用**(character/persona.py 的 `make_persona_section()`
 #            写的就是"人设只写性格/语气/关系/动作纪律",位置早就留好了)
 #   both     两处都放
 #
 # 为什么要测:这是**落点**的分叉,不是措辞的分叉。落点决定生效范围,
 # 而生效范围决定它会不会误伤自走轮 / 闲聊轮。
 # ============================================================
-# ⚠️ **工具文案通道不插值**(core/composer.py:120 是 f-string 拼接,不走 interpolate;
+# ⚠️ **工具文案通道不插值**(core/composer.py 的 `make_usage_section` 里 `_usage_text` 是 f-string 拼接,不走 interpolate;
 #    tools[] 的 description 同理)。所以这条通道里:
 #      · 写 {owner} → **原样漏给模型**
 #      · 裸写"主人" → 把 VALUES 的值抄死(换称呼就错)

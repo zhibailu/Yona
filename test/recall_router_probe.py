@@ -65,7 +65,7 @@ _LEGAL_SCOPES = {"all", "life", "talk"}
 #    CHAT_SITUATION 都从那里来(CHAT_SITUATION 里的 {owner} 由 VALUES 插值)。
 #    这里为了少依赖 composer 写死了一段,**所以也不该出现称呼**。
 #
-# 这个替身的形状 = core/composer.py:116 的 `_usage_text`:
+# 这个替身的形状 = core/composer.py 的 `make_usage_section` 里 `_usage_text` 那段:
 #   "[可用工具用法]\n" + "\n".join(f"- {name}: {usage}")
 # usage 为空串时**整段不出现**(composer 里就是 `if not lines: return None`)。
 _SYSTEM_HEAD = (
@@ -199,7 +199,7 @@ def main() -> None:
         if key is None:
             raise SystemExit(f"没有变体 {n!r};可选 {list(RECALL_VARIANTS)}")
         # → (desc, usage, scope 参数说明):后两项走**两条不同的通道**
-        #   (core/tools.py:20-24):usage 进 SYSTEM,参数说明进 tools[] 的 schema。
+        #   (core/tools.py 的 `Tool` docstring):usage 进 SYSTEM,参数说明进 tools[] 的 schema。
         picked[n] = variant_parts(key)
 
     log = load_log()

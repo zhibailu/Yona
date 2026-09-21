@@ -145,7 +145,15 @@ class Heartbeat:
         """分段睡眠,stop() 能及时打断。返回 False = 被要求停止。"""
         end = time.time() + seconds
         while self._running and time.time() < end:
-            time.sleep(min(0.2, end - time.time()))
+            # ⚠️ 必须夹 0(2026-09 修正)。上一行的循环条件和这一行的实际调用
+            #    **之间有一个窗口**:线程可能正好在窗口里被抢占,等它回来时
+            #    `end` 已经过去了 —— `min(0.2, end - time.time())` 于是是**负数**,
+            #    而 `time.sleep(负数)` 抛 `ValueError: sleep length must be non-negative`。
+            #    实测:`time.sleep(-0.001)` 就是这个错。
+            #    在心跳里这意味着**心跳线程整个被异常带走**(它没有 except 兜底),
+            #    症状是"她再也不自走了",而日志里只留一条 ValueError —— 很难查。
+            #    夹 0 之后最坏是空转一次循环,下一轮条件判定自然退出。
+            time.sleep(max(0.0, min(0.2, end - time.time())))
         return self._running
 
     def _jittered(self, seconds: float) -> float:

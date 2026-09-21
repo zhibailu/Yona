@@ -204,7 +204,8 @@ def build_apparatus(with_launch: bool = False, embedder=None,
     recall_tool = make_recall_tool(conn, embedder=embedder, verbose=False,
                                    boundary=boundary)
     recall_tool.description = desc
-    recall_tool.usage = usage          # 出厂不带 usage,由装配处贴(和 engine 一致)
+    recall_tool.usage = usage          # 探针自己贴 usage;**产品版不是这样** ——
+    # character/tools.py 的 make_recall_tool 自带 usage=RECALL_USAGE,engine 一个字都不贴
     recall_tool.parameters["properties"]["scope"]["description"] = scope_desc
 
     tools = [recall_tool]

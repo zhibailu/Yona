@@ -67,14 +67,56 @@ class SystemComposer:
         return section
 
     def unregister(self, name: str) -> bool:
+        """摘掉一个段。⏸ 占位(见下面整块标注)。"""
         return self._sections.pop(name, None) is not None
 
     def set_enabled(self, name: str, enabled: bool) -> bool:
+        """开/关一个段(不摘除,只让它不进 compose)。⏸ 占位(见下面整块标注)。"""
         sec = self._sections.get(name)
         if sec is None:
             return False
         sec.enabled = enabled
         return True
+
+    # ⏸ **占位:上面 `unregister` / `set_enabled` 两个方法,产品零调用。**
+    # (2026-09 清理时如实标注,不拆不删。)
+    #
+    # ① 现状:`grep` 全仓 —— 产品路径**一次都没调**
+    #    (`server/` 与 `character/` 里没有 `.set_enabled(` / `.unregister(`)。
+    #    ⚠️ `server/main.py` 的 `get_context_sources()` 里那个 `"enabled": True` **不是**这两个方法:
+    #    那是 `/context/sources` 静态响应体里的一个 JSON 字段,连类型都不是
+    #    `SystemSection.enabled`,别把它当调用点。)
+    #    真正在用的是实验/测试侧:`prompt_lab/tool_recall.py` 里
+    #    `composer.unregister("memory")`(拆掉记忆段做对照),以及
+    #    `test/test_composer.py`(两个用例:`set_enabled` 两处、
+    #    `test_unregister_removes_section` 两处)。
+    #
+    #    那**产品怎么停用一个段**?靠"**不注册不发**":
+    #    `character/persona.py` 的 `build_small_night_composer()` 里是条件注册 ——
+    #    `if situation and situation.strip(): composer.register(...)`,
+    #    `extra_sections` 也是循环注册。装配期不注册,段就不存在,
+    #    根本走不到 `enabled` 那一层。所以这两个方法是**另一条路子**
+    #    (注册完再关),产品选了"压根不给它注册"这条更早、更干净的路。
+    #
+    # ② 为什么留着:**运行期改装配**是真需求 —— UI 上"关掉某段"必须是
+    #    不重建 composer 就能生效的(重建 composer 要重跑整个 persona 装配)。
+    #    `enabled` 字段本身也**仍在使用**(`sections()` 的过滤、`SystemSection`
+    #    的构造默认),删这两个方法并不能顺带删掉那个字段。
+    #    而且 `prompt_lab` 现在依赖 `unregister` 做段级对照实验 ——
+    #    拆掉它等于拆掉一条已有的实验手法。
+    #
+    # ③ 什么条件才启用:出现**产品级的"运行期关段"需求**时 ——
+    #    最可能是 UI 上给上下文源做勾选(`/context/sources` 那个端点已经
+    #    在回"哪些源生效",但目前是硬编码的一行、没有写入口)。
+    #    那一刻 `set_enabled` 就是现成的写入口,`sections()` 的过滤已经接好了。
+    #
+    # ④ 将来手术要删哪几行:本注释块 + `unregister`(签名 + 函数体,2 行)
+    #    + `set_enabled`(签名 + 函数体,5 行)。
+    #    连带改:`test/test_composer.py` 的 `test_unregister_removes_section`
+    #    与另外两个 `set_enabled` 调用点(test/test_composer.py 里那两处 `c.set_enabled(...)`)、文件末尾的用例清单;
+    #    `prompt_lab/tool_recall.py` 的 `composer.unregister("memory")` 那处(实验台就断在那里,得换个对照手法)。
+    #    ⚠️ `SystemSection.enabled` 字段与 `sections()` 里的 `if s.enabled`
+    #    **别一起删** —— 那是段级启停的存储,与这两个方法不是一回事。
 
     def sections(self) -> list[SystemSection]:
         """按优先级升序(小的靠前)返回启用的段。"""
@@ -111,6 +153,37 @@ def make_usage_section(
     没提供时退回构造时闭包的 registry。这样 run_turn(tools=子集) 时,
     SYSTEM 的用法段和 schema 数组永远指同一批工具,不会出现
     "SYSTEM 提到 change_outfit 但本轮 schema 里没有"的错位。
+
+    ⏸ **越界遗留(第 1/3 处):`"[可用工具用法]"` 这句是模型可见的文案,
+    却写在内核里。**(2026-09 清理时如实标注,**不搬** —— 搬会改模型可见文本。)
+
+    ① 现状:`_usage_text` 末尾那行 `return "[可用工具用法]\n" + "\n".join(lines)`
+       —— 段标题字符串在 core;每个工具的 usage **正文**本来就在内容层
+       (`character/tools.py` 的 `RECALL_USAGE` 等,经 `Tool.usage` 进来),
+       只有这个标题漏在核心里。同类的 `WAKE_BUDGET_TEMPLATE` **已经归位**
+       (`character/personas.py`),判例原文就在那里:
+       「这句话曾写死在 engine 的 producer 里(文案混进装配代码) → 归位到这里:
+        引擎只算时长填进 {gap},句子怎么说是**内容层的事**,想改只改这一处」。
+       本条与它是**同一类**问题(内核里出现了模型会读到的句子),只是漏网。
+       ⚠️ **不要自己搬**:搬会改模型可见文本(哪怕只差一个换行),而那要重跑
+       对模型的评测 —— 属用户拍板范围。
+    ② 将来要搬,动哪几行、内容层加什么常量:
+       - `composer.py`:`make_usage_section` 里 `return "[可用工具用法]\n" + ...`
+         这一行 —— 改成 `return USAGE_SECTION_TITLE + "\n" + ...`,
+         并从内容层取值(见下);顺带决定 `- {name}: {usage}` 这个**条目格式**
+         要不要一起归位(它也是内核拼的,见同一行的列表推导)。
+       - `character/personas.py`:新增一个常量,如
+         `USAGE_SECTION_TITLE = "[可用工具用法]"`(放系统口吻区,与
+         `LIFE_EVENT_PREFIX` / `WAKE_BUDGET_TEMPLATE` 同一片);
+         段标题不属于 persona,别塞进 `PERSONA`。
+       - 接线:`make_usage_section(...)` 的调用处(`character/tools.py` 一侧的
+         装配)把它传进来,或给本函数加一个 `title: str = <现串>` 形参。
+       - 连带:`core/composer.py` 模块头那句"内核不写文案"的分层说法、
+         `docs/public/ARCHITECTURE.md:175` 那条"工具侧文案住在 tools.py"的更正要复核。
+    ③ **默认值必须与现串逐字相同**:`"[可用工具用法]"` —— 含方括号、无空格。
+       写成别的(加空格 / 换全角括号 / 改字)会**改掉所有轮次的 SYSTEM**,
+       而这是每次调用都进上下文的段,改动会静默影响全部对话。
+       搬完必须能证明输出逐字节不变(用同一份注册表对拍)。
     """
 
     def _usage_text(values: dict[str, Any]) -> str | None:
@@ -144,12 +217,74 @@ def make_timeline_section(
         与 "now_epoch"(秒级 float 或 callable)—— 引擎装配即此路径,
         同一只钟与世界 section 一致(注入"当前时间"时两段不打架)。
     now_epoch 缺省 = 系统时钟。
+
+    ⏸ **越界遗留(第 2/3 与 3/3 处):本段的两处模型可见文案也写在内核里。**
+    (2026-09 清理时如实标注,**不搬** —— 搬会改模型可见文本。)
+
+    ① 现状,两处:
+       (a) `_fmt()` 里那四个时间说法 —— `"刚刚"` / `f"{...} 分钟前"` /
+           `f"{...} 小时前"` / `f"{...} 天前"`(含它们各自的取整规则);
+       (b) `_timeline_text` 末尾那行 `f"[时间线] 距上次和主人说话: {_fmt(gap)}"`
+           —— 整句都在 core,**连换行/空格/冒号都算**。
+       判例同上(第 1 处标注里引的 `character/personas.py` 的
+       `WAKE_BUDGET_TEMPLATE`「曾写死在 producer 里 → 归位」那段):
+       同类的句子已经归位,这两处是**漏网的例外**。
+       ⚠️ **`"主人"` 是把 `VALUES["owner"]` 抄死了。** 关键差别在于:
+       **producer 通道不插值** —— `interpolate()` 只作用在 `template` 上,
+       `producer` 的返回值是**原样出段**的。所以这里写死"主人"之后,
+       内容层改 `VALUES["owner"]`(改称呼)**不会**影响这一句 ——
+       改称呼必须**回来改 core**。这正是"文案住在内容层"这条边界要防的事
+       (`character/personas.py` 的 `VALUES = {"owner": "主人"}` 才是它该取值的地方)。
+    ② 将来要搬,动哪几行、内容层加什么常量:
+       - `composer.py`:(a) `_fmt` 整个函数(四个分支的字符串);
+         (b) `_timeline_text` 的 return 一行。
+       - `character/personas.py`:新增常量,建议两个 ——
+         `TIMELINE_TEMPLATE = "[时间线] 距上次和主人说话: {gap}"`(**字符串里把
+         "主人"替换成 `{owner}`,让它走 `VALUES["owner"]`**)与一组时长说法
+         (如 `TIMELINE_JUST_NOW` / `_MINUTES` / `_HOURS` / `_DAYS` 四个模板,
+         或一个 `(上限秒数, 模板)` 的表)。放系统口吻区。
+       - 接线:与第 1 处同款 —— 经 `make_timeline_section(...)` 传入,
+         或给本函数加带现串默认值的形参。⚠️ 若走 `{owner}` 插值,
+         **`_timeline_text` 是 producer,不会自动插值** —— 必须自己调
+         `interpolate(TIMELINE_TEMPLATE, values)`,否则 `{owner}` 会原样
+         出现在 SYSTEM 里(那比抄死更坏)。
+       - 连带:`docs/pitfalls/HISTORY.md` 那条「[时间预算] 句子写死在 engine」
+         的同类条目可以补一条;`docs/public/ARCHITECTURE.md:175` 的更正也要改。
+    ③ **默认值必须与现串逐字相同**:
+       `"[时间线] 距上次和主人说话: {gap}"`(方括号、全角冒号 `:`,
+       逗号后**一个**空格),以及 `"刚刚"` / `" 分钟前"` / `" 小时前"` /
+       `" 天前"`(数字与单位之间**一个**空格)。
+       差一个空格都会改掉所有轮次的 SYSTEM —— 本段每轮都进上下文。
+       搬完必须逐字节对拍。
     """
 
     def _last_user_epoch(lg) -> float | None:
+        """最后一条**真人**消息的时刻;还没跟真人说过话则 None。
+
+        ⚠️ **每次 compose 现算,没有缓存,是 O(n) 扫描。**
+        本段每个 step 都要出一次(`compose` 由 system builder 每 step 现取,
+        见 `core/loop.py` 的 `_system_text`),所以这是**每 step 一遍全日志扫描**,
+        而且落在她那一轮里。**量级未测** —— 现在按"日志量级还小"处理
+        (一张卡的实测量级是几百到几千条事件)。
+        真变慢时要收口的是**日志侧**(维护一个"最后真人时刻"的游标或索引),
+        **不是在这里加缓存** —— 缓存会跟日志脱节,而本段的意义就是"现算的真相"。
+
+        2026-09 清理(等价重构):原来扫的是 `lg.events` —— 那是个**返回副本的
+        property**(`core/session_log.py`: `return list(self._events)`),
+        于是每 step 先付一次**整份事件表的复制**,再线性扫。
+        改成扫 `lg.of_type("user/message")`,语义**完全等价**:`of_type` 内部
+        直接遍历 `_events`(不复制整表)、同样保序,只是在过滤时就把
+        **根本不会命中**的事件(turn/step/assistant/chunk —— 日志的绝大多数)丢掉。
+
+        ⚠️ 判据一个字没动,别"顺手"改宽:自走占位(`source="self"`)、
+        compact(`source="compact"`)、编辑替身(`source="user-edit"`)
+        **都不算**真人消息 —— 靠的仍是下面那句 `== "user"`;
+        缺 source 的老消息按 `"user"` 处理(老日志不掉标,与
+        `derive_messages` 的 `user_time_prefix` 同一口径)。
+        """
         t = None
-        for e in lg.events:
-            if e.type == "user/message" and e.data.get("source", "user") == "user":
+        for e in lg.of_type("user/message"):
+            if e.data.get("source", "user") == "user":
                 t = e.time
         return t
 

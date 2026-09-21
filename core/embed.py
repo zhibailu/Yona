@@ -62,23 +62,35 @@ BGE 是纯推理,CPU 完全够:一条新记忆有 **20 轮**(≈60 秒)的余裕
 from __future__ import annotations
 
 import threading
-from typing import Any, Iterable
+from typing import Any
 
 BGE_NAME = "BAAI/bge-large-zh-v1.5"
 # BGE 官方用法:**query 侧加指令前缀,passage 侧不加**。
 # ⚠️ 两侧不对称是设计,不是漏写 —— "统一一下"会同时弄坏两边。
 QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章:"
 
+# 可选依赖要探路的那两个包。
+# 2026-09 清理:它原来是 `available(modules=("torch", "transformers"))` 的
+# **默认实参**,而那个形参全仓**零调用方**(`grep 'available(modules'` 只命中
+# 定义本身那一行)—— 从来没有人往 `available()` 里塞过别的包名,所以那个
+# "可配置"是假的。提成模块级常量之后:`available()` 无参、语义唯一,
+# 要换包/加包只改这一行(而不是"以为某个调用方会传")。
+REQUIRED_MODULES = ("torch", "transformers")
 
-def available(modules: Iterable[str] = ("torch", "transformers")) -> bool:
-    """两个包在不在。
+
+def available() -> bool:
+    """`REQUIRED_MODULES` 里那几个包在不在。
 
     ⚠️ **只探路,不 import** —— `import torch` 本身要 1.16 秒,拿它来问
        "能不能用",等于把懒加载白做了(`importlib.util.find_spec` 只查文件)。
+       这是本函数**唯一的存在理由**:别为了"顺手"把它改成 try-import
+       (那会让"问一句能不能用"变成 1.16 秒,`test/test_embed.py` 的
+       `test_available_probes_instead_of_importing` 就是钉
+       这一条的:`assert "torch" not in sys.modules`)。
     """
     import importlib.util
 
-    return all(importlib.util.find_spec(m) is not None for m in modules)
+    return all(importlib.util.find_spec(m) is not None for m in REQUIRED_MODULES)
 
 
 class BgeEmbedder:
@@ -128,6 +140,15 @@ class BgeEmbedder:
 
     @property
     def loaded(self) -> bool:
+        """权重读进来了没。
+
+        ⏸ 占位:产品路径零调用 —— 读它的只有 `info()`(就在下面,而 `info()`
+        本身也没人调)与 `test/test_embed.py`(`test_constructing_does_not_load_the_weights`
+        断言未加载、`test_warm_is_idempotent` 断言
+        `warm()` 之后为 True)。**不要删**:它是"懒加载到底发生没发生"的
+        唯一现成探针,而整个模块头讲的都是加载时机那 4.18 秒 ——
+        将来排查"权重是不是被谁提前读进来了",第一件事就是问它。
+        """
         return self._encode is not None
 
     def warm(self) -> "BgeEmbedder":
@@ -185,6 +206,34 @@ class BgeEmbedder:
         return self._embed([QUERY_PREFIX + text])[0]
 
     def info(self) -> dict:
+        """本嵌入器的现场快照(名字/是否已加载/设备/线程/离线开关)。
+
+        ⏸ **占位:产品零调用,只有 `test/test_embed.py` 在读**
+        (test/test_embed.py 四处断言)。**不要删。**
+
+        ① 现状:产品的装配(`server/app/engine.py` 的 `_embedder()`)只做
+           `embed_mod.get_embedder()` 拿句柄,**从不问它的 info**;
+           `MemoryCache.warm()` 也只调 `warm()`,不读这里。
+        ② 为什么留着:它是"**降级成纯关键词**"这条路上**唯一能看到设备/加载
+           状态的出口**。模块头整段在讲"拿不到包就退化、退化了不许静默",
+           而真出问题时(装了 torch 但权重读不出来 / device 配错 / threads
+           被设成 2 导致慢 4 倍)能看到的现场就是它这几个字段 ——
+           `threads` 那个字段尤其:模块头有张实测表
+           (threads=2 → 605 ms/条),而 `threads` 是构造参数,
+           只有这里能确认"到底传进去的是什么"。
+        ③ 什么条件才启用:接一个**读它的出口**时 —— 最可能是跟
+           `MemoryCache.status()`(那边也有一条同款占位标注)一起并进
+           同一个排障端点(如 `/admin/memory/<sid>`)。两处一起接才完整:
+           `status()` 说"补向量的账与降级原因",`info()` 说"设备与加载现场"。
+           接线之后这些键就是**契约**(排障/UI 会读),改键要连带改消费方。
+        ④ 将来手术要删哪几行:本函数整个(`def info` + 那个 return 的 dict,
+           共 8 行)。连带:`loaded` 属性(它只被这里与测试读 ——
+           删了 `info` 它就成了纯测试道具,一起删更干净)、
+           `test/test_embed.py` 四处断言。
+           ⚠️ 别顺手删 `self._device_used` / `self.threads` / `self.local_files_only`
+           这三个字段本身 —— 它们在 `_ensure_loaded` / 构造函数里是**真在用**的,
+           `info()` 只是把它们读出来。
+        """
         return {
             "name": self.name,
             "loaded": self.loaded,

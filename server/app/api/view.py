@@ -47,12 +47,25 @@ def _fmt_time(ts: float) -> str:
 
     UI 显示用 (created_at).slice(-5) 切出 "HH:MM";若带秒会切成 "MM:SS",
     造成 "22:37" 看起来像 22 点(实际是 11:22:37 的分秒)。
+
+    ⚠️ 与 `server/store.py:_fmt_time` **逐字相同**(连这段解释都一样)——
+    同一份契约的两份实现,改一处必须改另一处。
+    没做复用是因为两边都是下划线私有名,跨模块 import 私有名在本仓无先例
+    (待拍板:真要去重就并成一处,别靠 import 私有名)。
     """
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
 
 
 def _text_of(content) -> str:
-    """assistant 消息 content(blocks 或字符串)→ 纯文本。"""
+    """assistant 消息 content(blocks 或字符串)→ 纯文本。
+
+    ⚠️ 与 `server/store.py:_blocks_text` **逐字相同** —— 同一语义的两份实现,
+    改一处必须改另一处。注意这只是"同一族"里最像的一对:同样干这事的还有
+    `core/memory.py:_blocks_text`、`core/openai_compat.py:_text_of`、
+    `turn_lab.py`、`prompt_lab/tool_recall.py`,那几份行为细节各有出入
+    (比如要不要滤空串、非 list 怎么兜底)—— 真要收编得连它们一起定,
+    别只并这两份就以为完事。
+    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -83,13 +96,21 @@ def all_action_trails() -> list[dict]:
     call,result,call,result 变成 call,call,result,result,
     "找最近一条"会把结果配到**错的那个 call** 上(后发的 call 先被填)。
     id 是日志里本来就有的,按它配才是准的。
+
+    ⚠️ 这里是 core 投影规则(`core/session_log.py` 的 `derive_messages` 里同样读
+    `shadowed_seqs()` 再跳过)的**第二份实现** —— surface 遮蔽已应用
+    (2026-09 修:原来这一份漏了,用户删掉的生活事件/tool 痕迹会残留在面板上)。
+    **改 core 的投影规则时要同步这里**;`store._messages_view` 是照同一份规则写的。
     """
     trails: list[dict] = []
     log_ids = [s["id"] for s in engine._store.list_sessions()]
     for lid in log_ids:
         log = engine._store.load_log(lid)
+        shadowed = log.shadowed_seqs()
         by_call_id: dict[str, dict] = {}
         for e in log.events:
+            if e.seq in shadowed:
+                continue  # 被遮蔽的 call/result 一律不进轨迹(与 core 投影同一规则)
             if e.type == "tool/call":
                 item = {
                     "action": e.data.get("name", ""),
@@ -108,20 +129,34 @@ def all_action_trails() -> list[dict]:
     return trails
 
 
-def life_events(session_id: str) -> list[dict]:
+def life_events(session_id: str, log=None) -> list[dict]:
     """内心活动 = 某张卡自己 chat.log 里自走轮的生活事件(它独处时在想什么)。
 
     ⚠️ 读的是**原生日志文本**,但会剥掉"被模型抄进正文"的那行标记
     (`core.session_log.strip_copied_prefix`,与投影层同一个实现)——
     日志原文一个字不动,只影响这里给 UI 看的东西。
+
+    ⚠️ surface 遮蔽已应用(2026-09 修):这里是 core 投影规则的**第二份实现**,
+    跳过 `shadowed_seqs()` —— 否则你删掉的生活事件还留在内心面板上
+    (UI 真的消费它:`static/app-presets.js` 拉 `/admin/life-events`)。
+    **改 core 的投影规则时要同步这里。**
+
+    log 参数只为省一次读盘(store.load_log 无缓存):调用方已经拿到这张卡的
+    log 就传进来,None 时自己 load —— 签名向后兼容,老调用点不用改。
     """
-    log = engine._store.load_log(session_id)
+    if log is None:
+        log = engine._store.load_log(session_id)
+    shadowed = log.shadowed_seqs()
+    # self_turns 的收法与 store._messages_view 一致(不按 shadow 过滤),
+    # 被遮蔽的事件在下面投影循环里统一跳过 —— 两处保持同一条规则
     self_turns = {
         e.data["turn"] for e in log.events
         if e.type == "turn/start" and e.data.get("source") == "self"
     }
     out: list[dict] = []
     for e in log.events:
+        if e.seq in shadowed:
+            continue
         if e.type == "assistant/message" and e.data.get("turn") in self_turns:
             text = _text_of(e.data.get("content"))
             text = strip_copied_prefix(text, personas_mod.LIFE_EVENT_PREFIX)
@@ -146,13 +181,17 @@ async def get_workspace(session_id: str | None = None, limit: int = 18):
         for x in trails
     ]
     card_id = _target_card_id(session_id)
-    found = life_events(card_id)
+    # 这张卡的 log **只读一次**,life_events 与 self_turn_count 共用 ——
+    # store.load_log 无缓存(见 docs/pitfalls/HISTORY.md §四),原来这里为
+    # self_turn_count 又整读一遍(同一请求里同一张卡的 log 最坏读 4 遍)。
+    card_log = engine._store.load_log(card_id)
+    found = life_events(card_id, card_log)
     found.sort(key=lambda ev: ev["created_at"], reverse=True)
     events = [
         {"created_at": x["created_at"], "content": x["text"]} for x in found
     ]
     self_turn_count = sum(
-        1 for e in engine._store.load_log(card_id).events
+        1 for e in card_log.events
         if e.type == "turn/start" and e.data.get("source") == "self"
     )
     return {
@@ -175,6 +214,19 @@ async def get_workspace(session_id: str | None = None, limit: int = 18):
 
 @router.get("/objects")
 async def get_objects(limit: int = 18):
+    """物件舞台 —— **冻结合同位:恒返空是对的,别当死代码删**(2026-09 标注)。
+
+    - 现状:前端**真在调**(`static/app-objects-sensory.js` 拉
+      `/objects?limit=18`),所以 URL 契约必须活着;但物件舞台已撤
+      (`static/index.html` 里桌面物件 pane 已删),恒空 = 正确行为。
+    - 为什么留着:冻结区(sensory/objects/actions,见 `docs/tasks/RULES.md:13`
+      第 4 条与 `docs/STRUCTURE.md:66` 那张表:旧 `src/objects+actions` 冻结)。
+      URL 契约先留着,免得接回产物层时前端还要改一遍。
+    - 什么时候动:接回产物层(物件真产出对象)那天才填这里 —— 届时前端 pane
+      也要一起加回来,只改后端会得到一个"有数据但没人显示"的端点。
+    - 删它的前置条件:先摘掉 `static/app-objects-sensory.js` 里的 fetch 调用点,
+      否则前端会开始吃 404。
+    """
     return {"objects": []}
 
 
@@ -224,7 +276,17 @@ async def llm_log_stream():
 
 @router.get("/runtime/status")
 async def get_runtime_status():
-    """运行时状态:心跳状态 + 引擎可用性(供 UI/诊断)。"""
+    """运行时状态:心跳状态 + 引擎可用性(供 UI/诊断)。
+
+    ⏳ 占位(2026-09 清点):**当前全仓零调用方** —— 前端 `static/*.js` 与
+    `test/` 里都没有打这个 URL(grep `runtime/status` 只命中本文件),
+    而同类端点 `/workspace`、`/admin/life-events`、`/admin/llm-log` 都有前端调用。
+    它是诊断口:要么接进 UI 诊断面板,要么删。
+
+    ⚠️ 删它零影响(没有任何调用方),但代价是 `engine._heartbeat.status()`
+    (`core/heartbeat.py` 的 `Heartbeat.status()`)会失去唯一的消费者 ——
+    心跳跑没跑就没地方看了。所以**先留着**,等诊断面板落地时一并定去留。
+    """
     if engine._heartbeat is None:
         hb_status = {"running": False, "cycles": 0}
     else:

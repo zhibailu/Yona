@@ -13,20 +13,21 @@ Yona 新内核 · 事件源会话日志 (SessionLog)
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
-# ---------- 消息块类型 ----------
-
-TextBlock = dict[Literal["type", "text"], str]
-ReasoningBlock = dict[Literal["type", "text"], str]
-ToolCallBlock = dict[Literal["type", "id", "name", "arguments"], str]
-ToolResultBlock = dict[Literal["type", "toolCallId"], Any]
-
-Block = TextBlock | ReasoningBlock | ToolCallBlock | ToolResultBlock
-
+# ---------- 消息形状 ----------
+# 消息形状的**权威定义**是 `derive_messages()` 的返回值(见本文件下方):它自己
+# 就产出 `{"role": ..., "content": [...]}`,块类型也由它在投影处现拼 —— 不另外
+# 维护一套"块类型别名",两处写就会两处飘。
+#
+# 2026-09 清理:原来这里有五个别名(TextBlock / ReasoningBlock / ToolCallBlock /
+# ToolResultBlock / Block,共 6 行)。全仓零引用 —— 前四个的唯一引用者是 `Block`,
+# 而 `Block` 自己也没人用:没有任何签名、注解、isinstance 用过它们。
+# 要加块类型,请回到 `derive_messages` 的投影处定义(那里才是真在产块的地方)。
 Message = dict[str, Any]  # {"role": ..., "content": [...]}
 
 
@@ -183,7 +184,27 @@ class SessionLog:
         return self._next_seq - 1
 
     def replay_from(self, seq: int) -> list[Event]:
-        """回放：返回 seq 之后（含）的全部事件。用于崩溃恢复/续跑。"""
+        """回放：返回 seq 之后（含）的全部事件。
+
+        ⏸ **占位:docstring 里那句"用于崩溃恢复/续跑"是承诺,生产没接这个口子。**
+        (2026-09 清理时如实标注,不搬不改 —— 改 docstring 等于改一处已发布的设计话术。)
+
+        ① 现状:产品路径**零调用**。真正的恢复走**整文件重读** ——
+           `SessionLog.from_lines` / `server/store.py` 的 `_load_log` 把整个
+           日志重新建出来,不按 seq 增量续。调用者只有测试
+           (`test/test_session_log.py` 的 `test_replay_and_recover()`),文档 `docs/public/ARCHITECTURE.md:58`
+           也照原样写着"crash recovery / resumption"。
+        ② 为什么留着:它是"从任意 seq 之后接着放"的**唯一现成实现**,
+           而增量恢复(不必重读整份日志)是真实需求 —— 卡活得越久,整份重读
+           越贵。删掉它等于把这个口子一起删了,以后要做得从头写。
+        ③ 什么条件才启用:真做**增量恢复/续跑**时 —— 即调用方手里有一个
+           已确认落盘的 `last_seq`,只想拿它之后的事件,而不是重读整份文件。
+           在那之前它不该被任何新代码调用。
+        ④ 将来手术要删哪几行:本函数整个(签名 + docstring + 那一行 return,
+           共 3 行)。连带改:`test/test_session_log.py` 的 `test_replay_and_recover()`(唯一的调用者)、
+           `docs/public/ARCHITECTURE.md:58`(那句 crash recovery 要一起撤)。
+           ⚠️ 别顺手把 `Event` 类或 `_events` 一起删 —— 那是日志本体。
+        """
         return [e for e in self._events if e.seq >= seq]
 
     # ---------- surface 注解(遮蔽) ----------
@@ -292,6 +313,31 @@ class SessionLog:
     def surface_states(self) -> dict[int, str]:
         """每条事件的 surface 三态(供可观测/UI 转录本):
         'shadowed'(被遮蔽注解覆盖)/ 'current'(表面事件且未遮蔽)/ 'log-only'(非表面事件)。
+
+        ⏸ **占位:docstring 说的"UI 转录本"这个消费方不存在 —— UI 自己重算了一遍。**
+        (2026-09 清理时如实标注,不搬不改。)
+
+        ① 现状:产品路径**零调用**。UI 的聊天流是 `server/store.py` 的
+           `_messages_view` 自己算的 —— 它自己调 `log.shadowed_seqs()`
+           再自己排 `anchored`,**不受本函数支配**。真正在用的只有测试
+           (`test/test_session_log.py` 的 `test_shadow_single_seq_and_states()`)。另一处要留意的:**文档在说谎** ——
+           `docs/decisions/DESIGN.md:97` 把"UI 只消费内核的安全视图
+           (`surface_states()` 等),不反向塑造存储"写成了设计;实际 UI 走的是
+           store 自己那份重算。本内核注释不改文档(那是 docs 的事),
+           但按本仓库「文档真值」条约这条应当由用户拍板后回改。
+        ② 为什么留着:三态(遮蔽/表面/日志层)是**日志语义本身的定义**,
+           换个消费方(排障页、审计导出、UI 改正为消费内核)时它是唯一现成的
+           权威口径。而 `_messages_view` 那份是它的**手工复制品**,两者漂了会
+           静默分叉。
+        ③ 什么条件才启用:出现第二个消费方(排障/审计),**或者**决定把
+           `store._messages_view` 收编成"内核出三态、store 只渲染" ——
+           后者是本函数真正的归宿,但那是改 UI 数据源的产品决策,不是清理。
+        ④ 将来手术要删哪几行:本函数整个(签名 + docstring + 三态判定的
+           循环,共 15 行)。连带改:`test/test_session_log.py`(唯一调用者,
+           用例名 `test_shadow_single_seq_and_states`);
+           `docs/decisions/DESIGN.md:97`(那半句设计话术);
+           `log.shadowed_seqs()` 仍要留着(它才是 `derive_messages` 与
+           `store._messages_view` 都在用的那个)。
         """
         shadowed = self.shadowed_seqs()
         surface_types = {"user/message", "assistant/message", "tool/result"}
@@ -309,7 +355,6 @@ class SessionLog:
 
     def derive_messages(
         self,
-        last_n: int | None = None,
         fold_tool_traces: bool = False,
         retained_tools: set[str] | None = None,
         last_turns: int | None = None,
@@ -358,12 +403,19 @@ class SessionLog:
         日志里那 2 条脏字是唯一证据,`strip_copied_prefix` 靠它把被抄进正文的
         标记剥掉(见 `character/personas.py`)。
 
-        last_turns(2026-09 加,与 last_n 不同):按**已结束轮边界**保留最近
-        N 轮 + 当前未结束轮,整体裁掉更旧的已结束轮 —— 绝不切散轮内的
-        assistant tool-call/tool/result 配对(消息粒度裁剪会切出孤儿工具段)。
-        0 或 None = 全量(默认,行为不变)。窗口单位是"轮"不是"消息",
-        UI"保留最近 N 轮对话"即此语义;last_n 仍是粗暴的消息尾截,保留给
-        调用方自行选择。
+        last_turns(2026-09 加):按**已结束轮边界**保留最近 N 轮 + 当前未结束轮,
+        整体裁掉更旧的已结束轮 —— 绝不切散轮内的 assistant tool-call/tool/result
+        配对(消息粒度裁剪会切出孤儿工具段)。0 或 None = 全量(默认,行为不变)。
+        窗口单位是"轮"不是"消息",UI"保留最近 N 轮对话"即此语义。
+
+        ⚠️ **旧的 `last_n`(消息粒度尾截)已删(2026-09 清理)。** 它被
+        `last_turns` 取代,而且全仓**零调用方**(连测试都没有,连 docstring
+        里承诺的"保留给调用方自行选择"也从没发生过)。这个项目为**同一类问题**
+        立过判例:`test/test_session_log.py` 有一条用例的名字就叫
+        「注入侧拆干净了,那个参数不许再存在(留个死旋钮比删掉更坏)」——
+        一个没人转的旋钮比没有它更坏,因为下一个人会以为它有效。
+        **别再把它加回来**:切消息粒度必然切出孤儿工具段(见上一段),
+        那正是 `last_turns` 存在的理由。
 
         ⚠️ **独处轮(自走 / 补写)不占这个名额**(2026-09-21 用户拍板):
         它是**记忆**,取用走 `recall` 工具 —— 窗口是**对话窗口**,只数真人对白轮。
@@ -512,13 +564,14 @@ class SessionLog:
                 )
         anchored.sort(key=lambda item: (item[0], item[1]))
         messages = [m for _, _, m in anchored]
-        return messages[-last_n:] if last_n else messages
+        # 2026-09 清理:原来是 `return messages[-last_n:] if last_n else messages`。
+        # 尾截分支随 `last_n` 一起删了(见 docstring 末尾),现在是全量返回;
+        # 要收窗口请用 `last_turns`(轮粒度,不会切散工具配对)。
+        return messages
 
     # ---------- 持久化 ----------
 
     def to_lines(self) -> list[str]:
-        import json
-
         return [
             json.dumps(
                 {"seq": e.seq, "type": e.type, "data": e.data, "time": e.time},
@@ -529,8 +582,6 @@ class SessionLog:
 
     @classmethod
     def from_lines(cls, session_id: str, lines: list[str]) -> "SessionLog":
-        import json
-
         events = [
             Event(
                 seq=int(obj["seq"]),

@@ -5,10 +5,11 @@
      状态作为副作用更新,模型不直接写状态。文案 = 她做这个动作时怎么回事。
   2. 委派类(launch_subagent):没有状态 —— 派出去一件活,拿回一个结论。
      文案 = 她**什么时候该派人、怎么派得好**。这一条尤其要紧:人设里禁止
-     写死能力清单(character/persona.py:62),所以"会不会用这个工具"几乎
+     写死能力清单(character/persona.py 的 `make_persona_section` docstring,铁律那句),
+     所以"会不会用这个工具"几乎
      全部由这里的文案决定。
 
-工具文案有两条通道,缺一条它就瞎半只眼(core/tools.py:11-19):
+工具文案有两条通道,缺一条它就瞎半只眼(core/tools.py 的 `Tool` 类 docstring):
   description -> 进 tools[] 的 schema,教"调用格式"
   usage       -> 经 make_usage_section 进 SYSTEM 的 [可用工具用法] 段,教"怎么用得好"
 ★ 但 usage **只在走 composer 的 SYSTEM 里才到达模型**;SYSTEM 若是一条静态串,
@@ -36,7 +37,8 @@ _RECEIPT_KEYS = ("run_id", "status", "detail", "steps", "duration", "usage", "ou
 def _launch_usage(capabilities: Sequence[str]) -> str:
     """生成用法散文 —— **能力那句从工人的工具集来,不手抄**。
 
-    规矩出处:`character/persona.py:62`「能力唯一来源 = 本轮 schema + 工具用法段;
+    规矩出处:`character/persona.py` 的 `make_persona_section` docstring
+    「能力唯一来源 = 本轮 schema + 工具用法段;
     人设写死能力 → 工具子集变化时,模型仍以为有这工具」。这句话是"她能派出去
     做什么",和"她有什么工具"是同一类事实,所以同样不许写死 —— 写死就会在
     工具集变化后变成陈旧信息,而陈旧的能力描述会让她**凭假前提做决定**。
@@ -127,7 +129,8 @@ def make_launch_subagent_tool(
         #      change_outfit)。哪天她自己拿到上网工具,这句话要跟着改 ——
         #      它描述的是"她手上的工具集",那是装配处的事实,不是文案的自由。
         usage=_launch_usage(capabilities),
-        # 派活的结果跨轮保真:它是一次性的,重查不了(core/tools.py:17-19)。
+        # 派活的结果跨轮保真:它是一次性的,重查不了(core/tools.py 的 `Tool` docstring
+        # 里讲 `retain_result` 那一段,与 `retain_result: bool = False` 那行字段声明同一条)。
         retain_result=True,
     )
 
@@ -137,7 +140,7 @@ def make_change_outfit_tool(state: CharacterState) -> Tool:
     return Tool(
         name="change_outfit",
         description=(
-            f"更换角色当前穿着的衣物。"
+            "更换角色当前穿着的衣物。"
             f"可修改字段: {', '.join(fields)}。"
             "只改用户要求的字段,其余保持不动。"
         ),
@@ -146,8 +149,13 @@ def make_change_outfit_tool(state: CharacterState) -> Tool:
             "properties": {f: {"type": "string"} for f in fields},
         },
         func=lambda args: _apply_outfit(state, args),
+        # ⚠️ usage 里**不许再写工具名**:SYSTEM 那行已经是 composer 拼好的
+        #    `- {name}: {usage}`(`core/composer.py` 的 `make_usage_section` 里
+        #    `_usage_text` 那一个列表推导),usage 再念一遍名字,
+        #    模型看到的就是 `- change_outfit: 用户让换衣服时用 change_outfit;…`
+        #    —— 同一个名字一行里出现两次,纯噪音,还占字数。
         usage=(
-            f"用户让换衣服时用 change_outfit;只能改已注册字段: {', '.join(fields)};"
+            f"用户让换衣服时用;只能改已注册字段: {', '.join(fields)};"
             "改完把当前的穿着告诉用户。"
         ),
     )
@@ -262,10 +270,28 @@ R_EMPTY = "empty"        # 服务正常,确实没有相关的  → 不许说"想
 R_DEGRADED = "degraded"  # 退而求其次(语义路塌了 / query 没给)
 R_DOWN = "down"          # 检索整个跑不起来        → 示弱,别硬猜
 
-# **只挡明显无关的地板**,不是"相关性判据"(2026-09-19 实测证伪:
-# 同一件事换措辞,bi-encoder 分数在 0.358~0.422 之间横跳,硬判会误杀正确答案)。
-_FLOOR = 0.25             # < 这个数基本可以确定不相关(bge-large-zh 实测 0.216)
-_GREY_TOP = 0.45          # < 这个数 → 给结果,但**标明不确定**
+# ---------- 相似度地板:⏸ **测过,负提升,故意不接线**(2026-09-21 24:00) ----------
+#
+# ⚠️ 这个常量**没有接线**,而且**不要**接线 —— 见 `make_recall_tool` 的 `min_score`
+#    (默认 `None`),装配处 `server/app/engine.py` 也没传它。这是**故意的**。
+#
+# 依据:`test/recall_bench.py` 的「余量(纯余弦,闸门口径)」——
+#
+#     语料              负例最高余弦   可答最低余弦            余量
+#     hard(48 条)       0.338         0.481 / 0.499          +0.142 / +0.161  ✅ 分开
+#     big (315 条)      0.439         自然问法 0.395         −0.044           ❌ 重叠
+#                                     词面型   0.206         −0.232           ❌ 重叠
+#
+# **小语料上分得开,大语料上是重叠的。** 具体后果:一条真答案(语料里的「B-412」)
+# 最高余弦只有 0.206 —— 0.25 的 地板会把它**当成"确实没有"挡掉**,正是四态设计
+# 要避免的那种"真答案被说成想不起来";而负例那头 0.439 地板也**挡不住**。
+# → **没有正提升,有负提升,所以保持不接线。**(用户 2026-09-21:「有正提升就去做,
+#   没有就保持原样」)
+#
+# 将来要动它:必须先在 `test/recall_bench.py` 上跑出**正**余量,再决定取值;
+# 想启用就把它传给 `make_recall_tool(min_score=...)`,一行的事。
+_FLOOR = 0.25             # ⏸ 占位,未接线 —— 理由见上,别照旧注释理解成"已挡着"
+_GREY_TOP = 0.45          # ✅ 在用:< 这个数 → 给结果,但**标明不确定**
 
 
 # ---------- 日期抽取(元数据路由,不是打分) ----------
@@ -324,8 +350,18 @@ def make_recall_tool(
     index_fn: Callable[[], MemoryIndex | None],
     *,
     limit: int = 2,
-    limit_fn: Callable[[dict], int] | None = None,  # 产品侧算条数的钩子;默认常数 2
-    min_score: float | None = None,   # 相似度下限;None = 不设(产品默认不设,见 _FLOOR)
+    # ⏸ 占位 —— 别照旧注释("产品侧算条数的钩子")理解,那句**与事实相反**:
+    #   ① 现状:装配处 `server/app/engine.py` 的 `_tools.register(make_recall_tool(recall_index))`
+    #      **只传了 index_fn**,没传本参数 → 产品恒走 `limit=2`,`limit_fn` 一次都没被调用过。
+    #   ② 谁在用:只有探针/测试。`test/recall_probe.py` 的 R13("limit_fn 返回 0/-1 → 仍 ≥ 1")
+    #      与 R14("limit_fn 返回垃圾 → 回退默认,不炸")拿它当实验变量。
+    #   ③ 什么条件才接:真做"按上下文预算算条数"(limit 随剩余窗口浮动)时。在那之前**不许**接 ——
+    #      现在接上只会让条数跟着一个没人调过的函数乱变,而没有任何实测支撑。
+    #   ④ 手术:删本参数 + `_limit_of` 里的 `if limit_fn else` 那一处分支(同一次注释上方),
+    #      并同步删掉 R13/R14 两例;要启用则接线一行:
+    #      `make_recall_tool(recall_index, limit_fn=...)`。
+    limit_fn: Callable[[dict], int] | None = None,
+    min_score: float | None = None,   # ⏸ 相似度下限;**产品故意不传**(见 _FLOOR 注释的实测)
     now_fn: Callable[[], float] | None = None,      # 时间抽取用的钟
     boundary: bool = True,            # 结果侧"别补细节"边界句(MVP 默认开)
     verbose: bool = False,
@@ -437,9 +473,18 @@ def make_recall_tool(
 
     _WHY_TEXT = {"no_query": "你没说清找什么",
                  "semantic_failed": "检索这一步没跑成",
-                 "bad_scope": "你给的范围我不认识,按全部找了",
-                 "day_fallback": "你写的那天没有记录"}
-    # 这三种是"退了时间序",措辞要说清下面是什么;bad_scope 不是。
+                 "bad_scope": "你给的范围我不认识,按全部找了"}
+    # 【2026-09-22 删】原来这里还有一个 "day_fallback" 键 + 它专属的渲染分支
+    #   (`_render_body` 里的 `R_DEGRADED and why == "day_fallback"`,约 7 行)。
+    #   那是**不可达死代码**:枚举 `_run()` 全部赋值点只有 5 种 state/why ——
+    #   `R_DEGRADED,"no_query"` / `R_DEGRADED,"semantic_failed"` / `R_DEGRADED,"bad_scope"` /
+    #   `R_EMPTY,"day_empty"` / `(R_OK if rows else R_EMPTY),""` ——
+    #   **没有任何一处产出 `day_fallback`**。那次语义改写把它的活交给了
+    #   `(R_EMPTY, "day_empty")`(由下面 R_EMPTY 那段处理,并负责 nearby 补查),
+    #   于是这个键和那个分支同时成了僵尸。
+    #   留着它的坏处是**读的人以为还有第五条路**。要恢复:两处同时改 ——
+    #   `_run()` 的赋值点 + `_render_body` 的渲染分支。
+    # 这两种是"退了时间序",措辞要说清下面是什么;bad_scope 不是。
     _TIME_FALLBACK = ("no_query", "semantic_failed")
 
     def _render(r: dict) -> str:
@@ -474,13 +519,6 @@ def make_recall_tool(
             return (f"[回忆] 关于「{q}」没有查到。这是**确实没有相关的事**,"
                     "不是你想不起来 —— 别为它编内容。")
         lines = [f"{it['time']} {it['text']}" for it in items]
-        if r["state"] == R_DEGRADED and r["why"] == "day_fallback":
-            # 她说了一个日期、那天没记录,但去掉过滤**能查到东西**。
-            # 措辞必须两头都说清:那天确实没记 + 下面这些**不是那天的**。
-            head = (f"[回忆] 「{r['day']}」这段时间**没有记录**。"
-                    f"下面这几条是**前后**的事 —— 别当成那天的,"
-                    "先看看是不是你要找的:")
-            return head + "\n" + "\n".join(lines)
         if r["state"] == R_DEGRADED:
             mid = ("下面只是那段时间前后的事 —— " if r["why"] in _TIME_FALLBACK
                    else "")
@@ -534,11 +572,30 @@ def make_recall_tool(
         },
         func=_recall,
         # ⚠️ usage **必须挂在这里**(两条通道缺一条它就瞎半只眼,见本文件开头):
-        #    `core/composer.py:120` 的 make_usage_section 是
-        #    `f"- {name}: {usage}" for name, usage in reg.usage_entries()`
+        #    `core/composer.py` 的 `make_usage_section` 里,`_usage_text` 就是
+        #    `lines = [f"- {name}: {usage}" for name, usage in reg.usage_entries()]`
         #    —— 它只读 **Tool 上**的 usage。不挂 = SYSTEM 里没有这段 =
         #    她不知道这个工具怎么用得好(触发率和参数合规率都会掉)。
+        #    (按函数名找,不写行号:core/composer.py 本会话内正在被改动。)
         usage=RECALL_USAGE,
     )
-    tool.run_structured = _run  # 测试与实验台用:直接断言结构化结果
+    # ⏸ 占位 —— 这是**动态挂上去的属性**,不是 `Tool` 的字段。
+    #   ① 事实:`core/tools.py` 的 `Tool` 是普通 `@dataclass`,字段只有
+    #      name / description / parameters / func / usage / retain_result,**没有
+    #      `run_structured`**;下面这行是给那个实例临时挂了个属性。所以静态检查
+    #      (mypy/pyright)与 IDE 补全都**看不见它**,拼错名字也不会报错。
+    #   ② 约定:`run_structured` = `_run` 的结构化结果(dict:state/why/items/
+    #      scores/nearby/day/sem_q),给测试直接断言用 —— 渲染成人话的是 `func`。
+    #   ③ 调用方(2026-09-22 grep 逐处核过,**只有 test 这一处**):
+    #        test/test_recall_tool.py   ← 唯一真消费者
+    #          · `_build()` 里 `return tool, tool.run_structured`(统一取用点)
+    #          · 两处直接调用:`semantic_failed` 退化那例、`test_no_index_at_all_says_down`
+    #      ⚠️ **别被同名件骗了**:`prompt_lab/tool_recall.py`、`test/recall_e2e.py`、
+    #      `test/recall_router_probe.py`、`test/recall_probe.py` 读的都是
+    #      **探针那份副本**(`test/recall_probe.py` 的 `make_recall_tool`,它自己也挂了
+    #      一个同名属性),与本行**无关**。改本行不会动到它们。
+    #   ④ 要动它(改名 / 收进 `Tool` 正式字段 / 删掉):必须同时改上面 `test_recall_tool.py`
+    #      那一处 `_build()` + 两处直接调用,否则那三条断言当场 AttributeError。
+    #      正经做法是往 `core/tools.py` 的 `Tool` 上加字段(但那是内核,得单独拍板)。
+    tool.run_structured = _run  # 测试用:直接断言结构化结果(见上,非 Tool 字段)
     return tool

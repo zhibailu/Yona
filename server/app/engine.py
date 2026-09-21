@@ -16,10 +16,16 @@ import os
 import queue as _queue
 import threading
 import time
+import traceback
 from collections import deque
 from pathlib import Path
 
-from .llm_setup import load_runtime
+# llm_setup 的 import 一律在模块顶部(2026-09 清理):原来 llm_state() 里还有一句
+# 函数内 `from . import llm_setup`,与这一行是**同一个模块的两次 import**。
+# 无循环依赖:llm_setup.py 只 import json/time/pathlib/requests,不 import engine
+#   (grep `llm_setup` 全仓 + 读 server/app/llm_setup.py 开头的 import 段确认);而 load_runtime
+# 本来就在顶部,所以模块加载期 llm_setup 早已被导入 —— 那句函数内 import 没有任何惰性收益。
+from .llm_setup import load_runtime, sanitize
 
 from character.persona import build_small_night_composer
 from character import personas as personas_mod  # noqa: E402 文案(内容层);装配时现取属性,
@@ -99,9 +105,9 @@ _tools = ToolRegistry([make_change_outfit_tool(_state)])
 # 三条约束都是实测过的,**顺序不能动**(证据 test/test_subagent_wiring.py):
 #   ① 工具在**模块加载时**注册一次,llm 靠可变句柄晚绑定。因为 _build_engine
 #      会重跑(下面三条调用点 + turn_lab),而 ToolRegistry.register 撞重名会抛
-#      「已注册」(core/tools.py:48)—— 写在 _build_engine 里会炸在"用户换连接"这条路上。
+#      「已注册」(core/tools.py 的 `ToolRegistry.register()`)—— 写在 _build_engine 里会炸在"用户换连接"这条路上。
 #   ② 注册必须发生在 _loop 构造**之前**:AgentLoop 只在构造时快照一遍
-#      retain_result(core/loop.py:75-78),晚注册的痕迹会在后续轮被折掉,血缘从视图消失。
+#      retain_result(core/loop.py 的 `AgentLoop.__init__` 里 `self._retained` 快照),晚注册的痕迹会在后续轮被折掉,血缘从视图消失。
 #   ③ 子运行的 SYSTEM 走**每轮覆盖**(execute 内部传 system_prompt=),绝不把
 #      sys_by_source 递进去 —— 它认不出"工人轮",会发小夜子的人设。
 _worker_llm: dict[str, object] = {"llm": None}
@@ -118,6 +124,22 @@ _WORKER_LABELS: tuple[tuple[str, str], ...] = (
 # 是**隐私边界**不是技术参数,还没拍(SUBAGENT_FILE_ROOT 空 = 不接)。
 # ⚠ 给工厂的那个根现在是**惰性的**:构造只 resolve 路径、不做任何 IO,
 #   过滤掉之后文件工具根本不会进注册表 —— 它不代表我们采纳了那个根。
+#
+# ⚠⚠ 下面这个白名单是「放开文件工具」的**第二道闸门**(2026-09 清理时标注,行为未动)。
+#   事实:文件工具的放行有**两处**判定,现在是一处半开着、一处关着 ——
+#     ① `server/params.py` 的 `SUBAGENT_FILE_ROOT`(填上非空串 = 给沙箱根);
+#     ② 本常量(硬白名单,`in _WORKER_WEB_TOOLS` 是**无条件**过滤,与根是否为空无关)。
+#   要真放开,必须**同时**改这两处:只填 params 的根,文件工具仍会在下面那行
+#   `if tool.name in _WORKER_WEB_TOOLS` 被整批滤掉 —— **静默不生效**(工人既不会用,
+#   也不报错,能力句照旧只说"上网查"),很容易被误判成"接线失败"。
+#   反过来,只改本白名单、不给根,则会拿下面 `SUBAGENT_FILE_ROOT or DATA_DIR` 的
+#   `DATA_DIR` 当根 = 她的 data/ 本体(会话日志,连同 `data/llm.local.json`
+#   —— 那里面有 api_key,见 server/app/llm_setup.py 的 `_CONFIG_FILENAME` / `config_path()`),那是**越权读用户数据**,
+#   比不接线更糟。所以两处必须一起动。
+#   要不要放开 = 隐私边界,判定与待办见 docs/tasks/OPEN.md 那一行(`SUBAGENT_FILE_ROOT`)
+#   与 docs/protocols/SUBAGENT.md §9(worker_tools 那一行)。
+#   将来手术:把本常量换成"从参数推导的放行集"时,这段注释连同 `or DATA_DIR` 的兜底
+#   一起删(那时根必须显式给,不再有兜底)。
 _WORKER_WEB_TOOLS = ("web_search", "http_get")
 _worker_tools = ToolRegistry([
     tool for tool in make_read_only_tools(SUBAGENT_FILE_ROOT or DATA_DIR)
@@ -128,7 +150,7 @@ _worker_tools = ToolRegistry([
 def _worker_capabilities() -> tuple[str, ...]:
     """工人能替她做什么(短说法)—— 从**真正接进去的工具**推,不手抄。
 
-    规矩出处:character/persona.py:62「能力唯一来源 = 本轮 schema + 工具用法段;
+    规矩出处:character/persona.py 的 `make_persona_section()` docstring「能力唯一来源 = 本轮 schema + 工具用法段;
     人设写死能力 → 工具子集变化时,模型仍以为有这工具」。能力句与工具集是同一类
     事实,所以同样不许写死 —— 写死就会在工具集变化后变成陈旧信息,
     而陈旧的能力描述会让她**凭假前提做决定**。
@@ -175,6 +197,56 @@ def _run_worker(task: str, label: str) -> dict:
             tools=_worker_tools,
             max_steps=SUBAGENT_MAX_STEPS,
             max_tokens=SUBAGENT_OUTPUT_MAX_TOKENS,
+            # ⚠ 这里少喂两个字段(2026-09 清理时标注,**行为一个字节没动**):
+            #   * `store=` —— core/subrun.py 的 `execute(spec, llm, *, run_id=None,
+            #     store: SubRunStore | None = None)`。不传 = 子运行轨迹**不落盘**;
+            #     证据是同文件末尾那句 `if store is not None: store.save(rec)` ——
+            #     省略即 `SubRunRecord.events`(它的完整轨迹)结算完随对象丢掉。
+            #     (同一结论 core/subrun.py 在 `SubRunStore` 那段也自己写了一遍:
+            #      模块头"完整轨迹落独立 run store"那句"**是设计,不是我现状**"。)
+            #   * `parent=` —— core/subrun.py 的 `SubRunSpec.parent`(血缘:谁派的,
+            #     父会话 id)。不传 = `record.parent` **恒 None**
+            #     (`execute` 里 `parent=spec.parent`)。
+            #   现状定性:**接口给好了、产品端没接**(不是"v1 有意不落盘"):内核模块头
+            #   的设计写着"子运行的完整轨迹落独立 run store —— 真相没被稀释",
+            #   `SubRunStore` 也实现了(一次子运行一个 jsonl,含 save/load/list_ids),
+            #   缺的只是这一处装配。
+            #   代价(是语义,不是猜测):**工人干了什么,事后查不到**。主日志只留
+            #   一行 tool/call + tool/result(带 run_id 血缘),而"顺着 run_id 去 run
+            #   store 复盘"那条路是断的(仓根本没建);她的下一轮也只能看到回执里
+            #   那点蒸馏结论(`_final_text` = 最后一条 assistant 文本)。
+            #   要接时的接法(就是下面两行,用户没拍之前**不许接**):
+            #     store=SubRunStore(DATA_DIR / "subruns")  # 顶部 import 要加 SubRunStore
+            #     parent=_recall_sid["sid"]                # 派活那一刻正在跑的那张卡
+            #   parent 取 `_recall_sid["sid"]` 的依据:工具在 `run_turn` 内被调用,
+            #   而 `_recall_sid` 正是 turn worker 为**这一项**设的当前卡(见
+            #   `recall_index()` 与 `_turn_worker_loop` 的注释)。
+            #   为什么现在**不接**(两条都是产品决策,不是技术障碍):
+            #     ① 一接就多出一个落盘目录(data/subruns/)—— "数据往哪写"归用户拍;
+            #     ② run store 的保留策略(留多久、谁清)还挂在
+            #        docs/protocols/SUBAGENT.md §8「明确挂起」那一行("run store
+            #        保留策略"),没有它落盘只会越积越多。
+            #   将来手术:判定下来就在这一行后面补上面那两行 + 顶部 import;
+            #   这段注释随之整段删。现状与落点见 docs/protocols/SUBAGENT.md §9
+            #   (worker_tools / engine 两行)与 §8。
+            #   代价(是语义,不是猜测):**工人干了什么,事后查不到**。主日志只留
+            #   一行 tool/call + tool/result(带 run_id 血缘),而"顺着 run_id 去 run
+            #   store 复盘"那条路是断的(仓根本没建);她的下一轮也只能看到回执里
+            #   那点蒸馏结论(`_final_text` = 最后一条 assistant 文本)。
+            #   要接时的接法(就是下面两行,用户没拍之前**不许接**):
+            #     store=SubRunStore(DATA_DIR / "subruns")  # 顶部 import 要加 SubRunStore
+            #     parent=_recall_sid["sid"]                # 派活那一刻正在跑的那张卡
+            #   parent 取 `_recall_sid["sid"]` 的依据:工具在 `run_turn` 内被调用,
+            #   而 `_recall_sid` 正是 turn worker 为**这一项**设的当前卡(见
+            #   `recall_index()` 与 `_turn_worker_loop` 的注释)。
+            #   为什么现在**不接**(两条都是产品决策,不是技术障碍):
+            #     ① 一接就多出一个落盘目录(data/subruns/)—— "数据往哪写"归用户拍;
+            #     ② run store 的保留策略(留多久、谁清)还挂在
+            #        docs/protocols/SUBAGENT.md §8「明确挂起」那一行("run store
+            #        保留策略"),没有它落盘只会越积越多。
+            #   将来手术:判定下来就在这一行后面补上面那两行 + 顶部 import;
+            #   这段注释随之整段删。现状与落点见 docs/protocols/SUBAGENT.md §9
+            #   (worker_tools / engine 两行)与 §8。
         ),
         llm,
     )
@@ -359,9 +431,15 @@ def _turn_worker_loop() -> None:
             with _lock:
                 box["result"] = job()
                 # 这一轮把日志写完了 → 把新行同步进索引缓存(喂给后台补向量)。
-                # ⚠️ 必须在**锁内**:`_store.load_log` 有一条被 test_log_transaction
-                #    测住的不变量 —— 它只许在锁内被调用(加载→改→存盘是一段)。
-                #    这里虽然只是只读,但放宽那条不变量得用户点头才算数。
+                # ⚠️ 规矩是**"load → 改 → save 必须整段在同一把锁内"**(2026-09
+                #    清理时把原来那句放宽前的表述改准):store.load_log 无缓存、
+                #    save_log 整体覆盖,所以**锁外加载的旧副本**一旦在锁内整体
+                #    覆盖,就会抹掉别人等待期间写进去的东西 —— 见
+                #    docs/pitfalls/HISTORY.md §四 与 test/test_log_transaction.py。
+                #    **只读**加载可以在锁外:仓库里确实有多处如此(memory_sync()
+                #    就是锁外读、chat SSE 收尾那次 _session_log 也是)。**禁止**的
+                #    是"锁外加载 + 锁内整体覆盖"这一种组合。
+                #    这里保持锁内,是因为它紧跟在刚写盘的 job 后面,顺手且不再抢锁。
                 #    自己的 try:索引坏了不该让**她这一轮**失败。
                 if sid is not None:
                     try:
@@ -438,7 +516,7 @@ _model: str | None = None
 _models: list[str] = []
 
 # LLM 调用调试日志(llm-log):环形缓冲,记每次 LLM 调用的输入/输出。
-# 记录点 = 装配时的 _TracedLLM 包装(engine 层做,core 不动);
+# 记录点 = 装配时的 _TracingLLM 包装(engine 层做,core 不动);
 # 两种消费:
 #   * /admin/llm-log          —— 一次性快照(UI 打开面板时拉历史)
 #   * /admin/llm-log/stream   —— SSE 推送(每次新调用实时广播,无调用零流量)
@@ -516,19 +594,33 @@ def _log_messages_text(messages: list[dict]) -> str:
     return _clip_for_log("\n\n".join(lines))
 
 
-def _usage_suffix(out) -> str:
-    """invoke 分支的调试后缀:usage(若有)+ finish(截断标红)。"""
-    suffix = ""
-    u = getattr(out, "usage", None)
-    f = getattr(out, "finish_reason", None)
-    if u:
-        suffix = (f" · {u.get('input_tokens', 0)} in / "
-                  f"{u.get('output_tokens', 0)} out")
-    if f == "length":
-        suffix += " / length 截断"
-    elif f and not u:
-        suffix += f" · finish={f}"
-    return suffix
+def _usage_suffix(usage: dict | None, finish: str | None) -> str:
+    """LLM 调用调试后缀(usage + finish)—— invoke / stream **两处唯一实现**。
+
+    2026-09 清理:签名从"吃 AssistantOutput 对象"改成"吃两个原始值",因为原来
+    这个后缀是**手抄两份** —— 一份在此,一份内联在 `_TracingLLM.stream` 的 gen()
+    末尾。现在两处都调这一个(纯字符串,无副作用)。
+
+    ⚠ 两份旧写法有**一处**本来就不一致(收口前就存在,不是这次改出来的):
+      "没有 usage 但有 finish='length'" 时,旧 invoke 版输出 " / length 截断",
+      旧 stream 版输出 " · finish=length"。本函数统一取 invoke 版(截断说得更
+      明确)。影响面**只在 llm-log 调试面板那一行文案**(就是本模块 _llm_log 环形
+      缓冲喂给 static/app-media-debug.js 的字):它不进会话日志(core/session_log)、
+      不进喂模型的 messages、不改任何一轮的行为。缺 usage 的现实来源是代理不支持
+      stream_options(见 core/openai_compat.py 的 `stream()` docstring 与末尾
+      "usage-only chunk 补发"那两段)。
+    """
+    if usage:
+        suffix = (f" · {usage.get('input_tokens', 0)} in / "
+                  f"{usage.get('output_tokens', 0)} out")
+        if finish == "length":
+            suffix += " / length 截断"
+        return suffix
+    if finish == "length":
+        return " / length 截断"
+    if finish:
+        return f" · finish={finish}"
+    return ""
 
 
 class _TracingLLM:
@@ -549,6 +641,19 @@ class _TracingLLM:
     def invoke(
         self, messages, tools=None, temperature=None, max_tokens=None, model=None
     ):
+        """非流式调用(包一层只为补调试日志)。
+
+        ⚠ 产品路径**从不经过这里**(2026-09 清理时标注,留着不是僵尸,是接口完整性):
+        core/loop.py 的 `_stream_and_assemble` 里那行 `for chunk in self.llm.stream(...)`
+        是**全仓唯一的主 LLM 调用点**;子运行也是走 `loop.run_turn(...)`
+        (core/subrun.py 的 `execute`),同样流式。所以本分支的 llm-log 记录只在
+        "内核改用非流式"那天才会出现。
+        留着的原因是 LLM 协议把两件并列声明(`core/llm.py` 的 `LLM` 协议里 `invoke`
+        与 `stream` 并列,协议头写"流式或一次性至少其一"),`_TracingLLM` 作为完整
+        实现两件都给;探针/实验台里也确实有人直接调 invoke(test/recall_corpus_gen.py 的 `main()`)。
+        将来手术:内核确定全流式收口后,删本方法 + `_usage_suffix` 的调用点;
+        判定前先 grep ".invoke(" 确认没有仓库外消费者(包括仓库外的脚本)。
+        """
         chosen = model or self.model
         self._log("→", chosen, _log_messages_text(messages))
         t0 = time.time()
@@ -565,10 +670,14 @@ class _TracingLLM:
             parts.append(out.text)
         for tc in out.tool_calls:
             parts.append(f"[tool-call] {tc.name} {tc.arguments}")
+        # getattr 兜底保留(旧写法如此):out 若是个只实现了 text/tool_calls 的
+        # 鸭子对象,不该因为缺 usage 就抛。后缀算法只有一份:_usage_suffix。
+        u = getattr(out, "usage", None)
+        f = getattr(out, "finish_reason", None)
         self._log(
             "←",
             f"{chosen} · {(time.time() - t0) * 1000:.0f}ms"
-            f"{_usage_suffix(out)}",
+            f"{_usage_suffix(u, f)}",
             _clip_for_log("\n".join(parts)) if parts else "(空输出)",
         )
         return out
@@ -585,6 +694,19 @@ class _TracingLLM:
             # 工具调用按 index 聚合(与 Assembler 同一路由):一个调用 =
             # 一个 id/name 首段 + 若干 arguments 增量段 —— 逐段列会把
             # 一次 change_outfit 刷成二十行;聚合后每调用一行完整参数。
+            #
+            # ⚠ 这是**故意重复的实现**(2026-09 清理时标注,不改):同一套 index
+            # 聚合规则在 `core/assembler.py` 的 Assembler 里也有一份,push() 吃的
+            # 是同一个 chunk 形状。不复用的原因有两个,第二个才是硬理由:
+            #   ① 依赖方向:engine(产品层)包着 core 的 llm,让"调试观测"去 import
+            #      内核装配类,会把观测绑进内核装配语义;
+            #   ② 两者**故意不同**:`Assembler.blocks()` 在 `FINISH_LENGTH`(输出
+            #      被截断)时会**丢弃 tool-call**(core/assembler.py 模块头与
+            #      `blocks()` 里那条判定,理由"截断的执行不安全");而面板要照实显示
+            #      "模型其实发出了这些调用"。真改去复用,截断轮就会少显示东西 = 观测失真。
+            # 将来手术:哪天改 `core/assembler.py` 的聚合规则(按 id 聚合、同 index
+            # 多调用、增量拼接方式…),**这里要同步改一次** —— 这条一致性没有任何
+            # 测试钉住,只靠本注释守着。
             tools_map: dict[int, dict] = {}
             tools_order: list[int] = []
             usage: dict | None = None
@@ -622,13 +744,8 @@ class _TracingLLM:
                     args = "".join(t["args"])
                     parts.append(f"{t['name']} {args}".strip())
                 body += "\n[tool_calls] " + "; ".join(parts)
-            suffix = ""
-            if usage:
-                suffix = (f" · {usage.get('input_tokens', 0)} in / "
-                          f"{usage.get('output_tokens', 0)} out"
-                          f"{' / length 截断' if finish == 'length' else ''}")
-            elif finish:
-                suffix = f" · finish={finish}"
+            # 后缀与 invoke 分支同一个函数(2026-09 收口:原来是手抄的第二份)。
+            suffix = _usage_suffix(usage, finish)
             self._log(
                 "←",
                 f"{chosen} · {(time.time() - t0) * 1000:.0f}ms{suffix}",
@@ -783,6 +900,56 @@ def _human_gap(seconds: float) -> str:
     return f"{days} 天" + (f" {hours} 小时" if hours else "")
 
 
+# ---------- 时间/值的公共判定(只留一份实现;2026-09 清理收口) ----------
+
+def _is_backfill(log) -> bool:
+    """这一轮是不是**回放轮**(补写轮):日志设了时间游标 **且** 补写钟在转。
+
+    2026-09 清理:这条业务规则原来在 **4 处**各手写了一遍(`_live_epoch` 闭包、
+    `sys_by_source`、`system_component_sections` 的 mode 与 log_now)。现在只剩
+    这一份,那 4 处的判定全走它(`_epoch_now` 内部也调它)—— 改判定只改这里。
+
+    **两个条件缺一不可**,不是啰嗦:只设游标的是实验台"拨当前时间"的普通轮
+    (它要的是实时视图),两个都设才是真回放。判定为何收窄、以及它对工具可见性的
+    影响,见 docs/protocols/TOOL_VISIBILITY.md §3(那里引的就是 sys_by_source 这一行)。
+    """
+    return (log is not None and log.time_cursor is not None
+            and bool(_backfill_clock["ts"]))
+
+
+def _epoch_now(log=None) -> float:
+    """时间线的"现在"(秒级)—— 全仓唯一一份。
+
+    回放轮 = 历史游标(_backfill_clock["ts"]);普通轮 = 实验台拨过的当前时刻,
+    都没有 = 真实墙钟。它与 world 段那只钟同源(那边是 _live_clock 的 localtime
+    形式),所以"同一只钟、不打架"这条约束落在**这一个函数**上:要换时间源就改它。
+    """
+    if _is_backfill(log):
+        return _backfill_clock["ts"]
+    return _clock_override["ts"] or time.time()
+
+
+def _values(registry, log, now_epoch: float) -> dict:
+    """compose 的值包:人设插值常量 + 注册表 + 本轮日志 + 已算好的"现在"。
+
+    2026-09 清理:这个字面量原来也是**两份**(`_build_engine` 里的闭包 +
+    `system_component_sections` 里的手抄),现在两处都走它,now_epoch 由调用方算好
+    传进来(算它的函数只有 `_epoch_now` 一个)。
+
+    ⚠ registry 在**两个调用点上取值不同,而且是有意的**(不是漂移):
+      * `sys_by_source`(真正喂模型那条路)传**本轮真正开放**的注册表 ——
+        补写轮给的是空表 `ToolRegistry([])`(见 _maybe_backfill_life,理由:
+        "那段日子怎么过的,不该有实时工具");
+      * `system_component_sections`(只读观测口)固定传全局 `_tools`。
+    观测口要回答的是"完整装配起来长什么样",它不知道、也不该知道某一轮实际开了
+    哪些工具;要按**本轮工具**逐段看 SYSTEM,用 prompt_lab/tool_recall.py 的
+    `sections()` —— 那里自己传 registry,它的 docstring 里已写明为什么不用本函数
+    (那个台子要的是"本轮真发出去的东西")。所以这两处**不要硬合并**。
+    """
+    return {**personas_mod.VALUES, "registry": registry,
+            "log": log, "now_epoch": now_epoch}
+
+
 # ---------- 装配 ----------
 
 def _build_engine(cfg: dict | None = None) -> None:
@@ -835,12 +1002,9 @@ def _build_engine(cfg: dict | None = None) -> None:
         ts = _clock_override["ts"]
         return time.localtime(ts) if ts else time.localtime()
 
-    def _live_epoch(log=None):
-        # 时间线的"现在":与 _live_clock 同一只钟(秒级)。回放轮 = 历史游标;
-        # 普通轮 = 实验台拨过的当前时刻,否则真实墙钟。
-        if log is not None and log.time_cursor is not None and _backfill_clock["ts"]:
-            return _backfill_clock["ts"]
-        return _clock_override["ts"] or time.time()
+    # (原来这里还有个 `_live_epoch` 闭包算"时间线的现在" —— 2026-09 清理收进
+    #  模块级 `_epoch_now`(判定 + 取值各只剩一份,见本文件"时间/值的公共判定"段)。
+    #  这里只留 `_live_clock`:它是 world 段要的 localtime 形式,与 epoch 那个同源。)
 
     # VISION 决策 8:世界=绝对时间,时间线=相对时间(距上次真人互动多久)。
     # 段在构造时不闭包 log —— compose 时经 values["log"]/["now_epoch"] 现给
@@ -890,37 +1054,44 @@ def _build_engine(cfg: dict | None = None) -> None:
     _composers["self"] = self_composer
     _composers["backfill"] = backfill_composer
 
-    def _values(registry, log=None) -> dict:
-        """compose 值:人设插值 + 本轮工具 + (时间线用)日志与同一只钟。"""
-        return {**personas_mod.VALUES, "registry": registry,
-                "log": log, "now_epoch": _live_epoch(log)}
-
     def sys_by_source(registry, source, log=None):
         # 三参 builder:回放轮 = 时间游标 **且** 补写钟在转(engine 产品补写/lab 补写
         # 模拟都同时设两者)—— 用补写视图(世界时间=历史游标)。实验台"拨当前时间"
         # 的普通轮只设 log 游标(给事件盖时间戳),_backfill_clock 恒 0 → 不算回放,
         # 走陪聊/自走实时视图(世界时间=_clock_override)。(2026-09 判定收窄)
-        if log is not None and log.time_cursor is not None and _backfill_clock["ts"]:
-            return backfill_composer.compose(_values(registry, log))
+        # ⚠ 判定与"现在"都走模块级那份唯一实现(_is_backfill / _epoch_now),这里
+        #   不再内联 —— 同一条判定原来在 4 处各写一遍,改一处必漏三处(2026-09 清理)。
+        values = _values(registry, log, _epoch_now(log))
+        if _is_backfill(log):
+            return backfill_composer.compose(values)
         composer = self_composer if source == "self" else chat_composer
-        return composer.compose(_values(registry, log))
+        return composer.compose(values)
 
     _loop = AgentLoop(
         SessionLog("_boot"),
         llm,
         _tools,
         system_prompt=sys_by_source,
+        # max_steps=8 = **主聊天轮**的单轮步数上限(她一轮里最多连调 8 次工具)。
+        # ⚠ 这个 8 与 `params.SUBAGENT_MAX_STEPS = 8`(server/params.py 的 `SUBAGENT_MAX_STEPS`)
+        #    **只是撞数,语义无关**:那个是**子运行(工人)**的步数上限,这个是
+        #    她自己的轮。改一个不会改另一个 —— 看到两边都是 8 不代表同一条线。
+        # ⚠ 它本身是一条**漏网的 params 旋钮**:产品语义参数的唯一来源是
+        #    server/params.py,而这一条硬编码在装配处(内核兜底是另一个数 ——
+        #    core/loop.py 的 `AgentLoop.__init__` 签名 `max_steps: int = 20`)。
+        #    挪进 params 要改 server/params.py,不在本次清理授权范围内,先就地标着。
+        #    将来手术:params.py 加一条(如 MAIN_MAX_STEPS = 8),这一行改成它。
         max_steps=8,
         # 折叠视图开(2026-09-19 用户拍板,原为 False):
         # **已结束轮里,没声明 retain_result 的工具痕迹不再进模型输入**,只留她
         # 说过的话。要的就是用户那句「tool 的 result 是个**瞬时产物**,不拼进
         # 常驻内容,即使 system 内也不放」—— 需要就现调。
-        # 谁保住痕迹由**工具自己声明**(core/tools.py:26-28):
+        # 谁保住痕迹由**工具自己声明**(core/tools.py 的 `Tool` docstring 里 retain_result 那一段):
         #   launch_subagent = True  (一次性委派,重查不了 → 跨轮保真)
         #   recall / change_outfit = False(需要就现调;穿着在 [当前角色状态] 段里)
         # 改之前实测过 False 的后果:recall 的原文跨轮留在上下文里
         # (prompt_lab/check_transient.py,0 花费可复跑)。
-        # 折叠**只改投影,日志原文一个字不动**(core/session_log.py:274)。
+        # 折叠**只改投影,日志原文一个字不动**(core/session_log.py 的 `derive_messages()`)。
         fold_tool_traces=True,
         # ⚠️ 这里**没有** life_event_prefix(2026-09-21 拆除):生活事件整条不进投影,
         # 取用路径只剩 `recall` 工具。判定见 core/session_log.derive_messages。
@@ -933,7 +1104,22 @@ def _build_engine(cfg: dict | None = None) -> None:
 
 
 def _session_log(session_id: str) -> SessionLog:
-    """按会话 id 取日志(不存在会由 store 建空)。"""
+    """按会话 id 取日志(不存在会由 store 建空)—— **只读入口**。
+
+    2026-09 清理时评估过"删掉它、让调用方直接 `engine._store.load_log`":
+    **没删**,因为它不是死包装 —— server/app/api/chat.py 里两处都在用:
+      * `_job()` 内那句 `log = engine._session_log(sid)`(排队拿到锁之后加载);
+      * SSE 收尾那句 `log2 = engine._session_log(sid)`(回本轮最后一条消息 id)。
+
+    ⚠ 但它只是个**只读**门面,写路径的调用方仍然直接伸进 `engine._store`:
+      * server/app/api/chat.py 的 `_job()`:`engine._store.save_log(sid, log)`
+      * server/main.py 的脉冲 `_job`:`engine._store.save_log(sid, log)`
+      * 引擎自己的 LifeLoop / 补写 `_card_job` 同样直连 `_store.save_log`
+    (曾并列的 `touch_session` 那处已被 chat.py 自己删掉 —— 它的注释写着"重复的读+写"。)
+    要不要把读写都收口到 engine(加 `engine.save_log()` 之类)是**待定**决策:
+    收口会让"日志不许绕过锁"这条更好守,但会改 4 处及以上调用方,不在本次清理
+    的授权范围内。判定前别删这个包装(删了 chat.py 那两处会当场 AttributeError)。
+    """
     return _store.load_log(session_id)
 
 
@@ -949,28 +1135,43 @@ def system_component_sections(
     与喂模型的 compose 是**同一批段**(真实装配的段,不是实验台另拼),
     只是按段标名渲染出来 —— 看 persona/situation/world/state/tool_usages
     各是谁、边界在哪。渲染仍是段自身的 render(values),不写日志。
+
+    ⚠ 这是**只读观测口,产品路径零调用**(2026-09 清理时标注;不是死代码,但也
+      不属于产品面)。全仓真实调用方只有三处:turn_lab.py(打印台那份组件拆分)、
+      test/test_engine_clock.py(多条断言)、test/subagent_prompt_view.py(提示词视图);
+      prompt_lab/ 只在注释里说明**为何不调它**(tool_recall.py 的 sections() docstring)。
+      **摘掉它的条件** = 实验台不再需要"逐段看 SYSTEM"(那时上面三处调用点跟着改);
+      在那之前必须留着 —— 它是"这一轮到底装配了什么"唯一的只读真相口。
+
+    ⚠ 它内部与 `sys_by_source` **曾经**各有一份同判定的副本(回放轮判定 + 时间线
+      "现在"的手抄),2026-09 已收口:现在两边都走模块级 `_is_backfill` /
+      `_epoch_now` / `_values`。唯一**有意保留的差异**是 registry —— 这里固定
+      `_tools`(完整装配),不吃本轮的工具子集;差异与理由写在 `_values` 的注释里,
+      改这里之前先读那一段(照抄到别处会让"没开放的工具"也出现在视图里)。
     """
     # 与 sys_by_source 同一判定(2026-09 收窄):回放轮 = 游标 **且** 补写钟在转;
     # 实验台"拨当前时间"的普通轮(只设游标)按 source 显示陪聊/自走视图。
-    mode = "backfill" if (log is not None and log.time_cursor is not None
-                          and _backfill_clock["ts"]) \
-        else ("self" if source == "self" else "chat")
+    mode = ("backfill" if _is_backfill(log)
+            else ("self" if source == "self" else "chat"))
     composer = _composers.get(mode)
     if composer is None:
         return []
     # 时间线段的 log/now 用同一只钟(与 world 不打架):普通轮 = 当前覆盖/墙钟,
-    # 回放轮 = 补写游标 —— 和 sys_by_source 的 _values 一致。
-    log_now = _backfill_clock["ts"] if (log is not None
-                                         and log.time_cursor is not None
-                                         and _backfill_clock["ts"]) \
-        else (_clock_override["ts"] or time.time())
-    values = {**personas_mod.VALUES, "registry": _tools,
-              "log": log, "now_epoch": log_now}
-    return [
-        (s.name, s.render(values))
-        for s in composer.sections()
-        if s.render(values) and s.render(values).strip()
-    ]
+    # 回放轮 = 补写游标 —— 与 sys_by_source 同源(都调 _epoch_now)。
+    values = _values(_tools, log, _epoch_now(log))
+    # 每段**只 render 一次**(2026-09 等价重构):原写法是
+    #   [(s.name, s.render(values)) for s in composer.sections()
+    #    if s.render(values) and s.render(values).strip()]
+    # 每个段被调了三遍 render()。render 是纯函数(producer 现算字符串 / 模板插值),
+    # 所以输出逐字不变,省下的是**两遍重复计算** —— persona / situation 段每次
+    # render 都要对整段文案做插值,段多了很可观。正确写法同
+    # prompt_lab/tool_recall.py 的 sections()(text = sec.render(values) 先算好)。
+    out: list[tuple[str, str]] = []
+    for s in composer.sections():
+        text = s.render(values)
+        if text and text.strip():
+            out.append((s.name, text))
+    return out
 
 
 def _start_heartbeat() -> None:
@@ -988,7 +1189,9 @@ def _start_heartbeat() -> None:
     _life_gate = gate
 
     def _on_hb_error(exc: Exception) -> None:
-        import traceback
+        # traceback 的 import 已提到模块顶部(2026-09 清理:原来这里有一句函数内
+        # `import traceback`,只在异常路径上才跑,没有惰性收益,还让"谁在用
+        # traceback"要多读一层)。
         err_file = DATA_DIR / "heartbeat_error.log"
         err_file.parent.mkdir(parents=True, exist_ok=True)
         with open(err_file, "a", encoding="utf-8") as f:
@@ -1074,7 +1277,12 @@ def _maybe_backfill_life() -> None:
         """**一张卡**的补写 = **一个队列项**(不可分割,见本函数 docstring)。"""
         card_log = _store.load_log(sid)
         last_active = card_log.events[-1].time if card_log.events else None
-        trigger, reason, gap = _wake_decision(last_active)
+        # 第三个返回值(gap 秒)**这里用不到** —— 2026-09 清理改成 `_`,因为下面
+        # 循环里还会算出另一个**语义完全不同**的 gap(两件事之间的空档),同名必看错。
+        # ⚠ `_wake_decision` 的返回值**不许删**:第三项有测试在用
+        # (test/test_backfill.py 的 `test_decision_long_gap_backfills` 直接断言
+        #  `gap > WAKE_AFTER_GAP_SECONDS`),这里只是"不接住它"。
+        trigger, reason, _ = _wake_decision(last_active)
         print(f"[backfill] 卡片 {sid}: {reason}")
         if not trigger:
             return
@@ -1098,10 +1306,13 @@ def _maybe_backfill_life() -> None:
                 gap_note = ""
             else:
                 prev = events[i - 1]
-                gap = e.start - (prev.start + prev.budget_min * 60)
-                if gap > 60:
+                # 改名 idle_gap(2026-09 清理):它是**两件生活事件之间**的空档,
+                # 与 _wake_decision 返回的"离线时长 gap"是两回事 —— 同名会让人
+                # 以为这里在复用上面那个值(上面那个已改成 `_`,根本没接住)。
+                idle_gap = e.start - (prev.start + prev.budget_min * 60)
+                if idle_gap > 60:
                     gap_note = (
-                        f"\n距离你上一件事做完已经过了约 {_human_gap(gap)}"
+                        f"\n距离你上一件事做完已经过了约 {_human_gap(idle_gap)}"
                         "(中间的时间平平淡淡,没发生值得记的事)。"
                     )
                 else:
@@ -1166,18 +1377,29 @@ def _maybe_backfill_life() -> None:
 
 def llm_state() -> dict:
     """给 HTTP 的公开连接状态(不含 api_key)。未配置 = configured False。"""
-    from . import llm_setup
-    s = llm_setup.sanitize(_llm_cfg)
+    s = sanitize(_llm_cfg)  # import 已提到模块顶部(2026-09 清理,见文件头注释)
     if s.get("configured") and not s.get("model"):
         s["model"] = _model or (s["models"][0] if s["models"] else "")
     return s
 
 
-def resolve_model(candidate: str | None) -> str | None:
-    """UI 想用哪个模型 → 只认当前端点可用列表内的;否则回默认模型。"""
-    if candidate and candidate in _models:
-        return candidate
-    return _model
+# (2026-09 清理)这里原来有个 `def resolve_model(candidate)` —— 全仓**零调用**的死
+# 函数(真在用的校验不在这儿),已删。判据:删除前 grep `resolve_model` 全仓**零个
+# 调用点**,唯一命中是 server/app/api/chat.py 的一句注释(那条也同期改掉了,见下)。
+#
+# 模型可用性校验的**唯一落点** = `merge_turn_settings` 里那一行
+# 「`if available_models and model not in available_models: model = default_model`」
+# (即下面这个函数体内;语义:当轮/快照给的模型不在当前连接可用
+# 列表里 → 回 default_model,换端点/模型下线时防呆)。入口链:
+# 聊天轮走 `resolve_turn_settings` → 传 `available_models=tuple(_models)`;
+# 会话快照本身也过一道 —— server/main.py 的 `_clean_settings` 拿 `engine._models`
+# 挡非法模型(400)。
+# ⚠ 指向旧函数名的注释:核对时(本次清理)server/app/api/chat.py 里 `ChatRequest.model`
+# 上面那段注释**已经**改成指向 `engine.merge_turn_settings` / `available_models`
+# 形参,不再是 `resolve_model` —— 所以这里没有遗留待改项。注意那处改动**不是本次
+# 清理做的**(本次只动 server/app/engine.py 与 server/main.py;chat.py 的改动来自
+# 同一工作树里的另一路并行改动,见 git diff)。将来若再看到有注释/文档指向
+# `engine.resolve_model`,按上面那段改准。
 
 
 def merge_turn_settings(

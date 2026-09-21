@@ -30,7 +30,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .. import engine
 
@@ -40,14 +40,53 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     session_id: str | None = None
     message: str = ""
+    # ⏳ 占位(行为上收了不读;2026-09 冻结区,补标注)——
+    #   ① 现状:本字段在 server 侧**没有任何读取方**(grep `sensory` 的 .py 命中
+    #      只有这一行);而前端**也不在发**:`_sensoryPayload()`
+    #      (static/app-objects-sensory.js 的 `_sensoryPayload()`)已无调用点,`sendMessage()` 的
+    #      `overrideSensory` 形参(static/app-messages.js 的 `sendMessage()`)声明了从不使用,
+    #      POST body(同文件 `sendMessage()` 里那个 `body: JSON.stringify(...)`)里没有这一项 —— 即收发两头都已是死的,
+    #      schema 位是唯一活物。
+    #   ② 为什么留着:感官是**记录在案的冻结区**(后端无 /sensory/* 端点,UI 入口
+    #      已撤,见 static/app-objects-sensory.js 头部与 docs/tasks/RULES.md:13
+    #      第 4 条「冻结区(sensory/objects/actions)不进内核」);
+    #      schema 已固化,留着不产生任何行为,删了将来接回要连前端一起改。
+    #   ③ 什么时候动:接回感官那天(旧 D:\MyProject\Yona\src\sensory)—— 后端加
+    #      /sensory/* 端点并让内核把 visual/voice 真正转成消息内容;届时改
+    #      server/app/api/(新模块)+ static/app-objects-sensory.js
+    #      + static/app-messages.js(把 payload 真接回 body)。
+    #   ④ 删它的前置条件:先摘掉前端那三处(两个函数 + 形参链),否则会留下一条
+    #      "发了没人收 / 收了没人发"的假通道 —— 这正是 /bg-position 踩过的坑
+    #      (media.py:session_id 被 pydantic 静默丢弃,200 且查不出来)。
     sensory: dict | None = None
     # ---- 产品旋钮(2026-09 真接线;见 _run 内注释)----
-    model: str | None = None  # ✅ 同端点换模型 id(engine.resolve_model 校验列表内才生效)
+    # model:同端点换模型 id。**真正生效的校验**在 `engine.merge_turn_settings`
+    # 的 `available_models` 形参(判定:`if available_models and model not in
+    # available_models: model = default_model`),由 `resolve_turn_settings` 传
+    # `tuple(_models)` 进来 —— 不在列表内就回默认模型。别再指向旧函数名
+    # (那个只做同样判断的旧函数已作为零调用死代码清掉)。
+    model: str | None = None  # ✅ 同端点换模型 id(校验落点见上)
     temperature: float | None = None  # ✅ 每轮覆盖,None = params 默认 0.9
     system_prompt: str | None = None  # ✅ 留空=旗舰人格;填写=本轮起覆盖
     max_rounds: int | None = None  # ✅ 上下文窗口:保留最近 N 轮;0=全量
-    # ---- 占位(不接逻辑,防 schema 反复改;compact 落地后启用)----
+    # ---- 占位(不接逻辑,防 schema 反复改;2026-09 补全标注)----
+    #   ① 现状:收了不读 —— 输出上限由服务端常量定死(server/params.py 的
+    #      `LLM_OUTPUT_MAX_TOKENS = 4096`),本字段进不了任何调用;前端已不再发送
+    #      (static/app-core.js 与 static/app-messages.js 都注明了"不再发送")。
+    #   ② 为什么留着:schema 已固化(code 里明写"防 schema 反复改"),留着的成本
+    #      只是多一个永远为 None 的字段。
+    #   ③ 什么时候动:真要放开"客户端调输出上限"那天 —— 改 server/app/api/chat.py
+    #      (`_run` 里把它并进 resolve_turn_settings/LLM 调用)+ server/params.py;
+    #      前端 static/app-core.js 的 getSettings() 要把它加回 body。
+    #   ④ 删它的前置条件:前端 getSettings()/body 里确认无此键(**现在已满足**),
+    #      且确认没有外部客户端在用这个端点(本地单用户 = 满足)。
     max_tokens: int | None = None  # ⏳ 输出上限固定 4096(params),客户端字段仅占位
+    #   ① 现状:收了不读(同 max_tokens);② 为什么留着:摘要压缩 = 未来 compact
+    #      (docs/decisions/DESIGN.md §9「未来:compact(压缩)怎么做」),schema 先占位;
+    #   ③ 什么时候动:compact 落地时 —— 改 core/session_log.py 的 `replace`(原语已
+    #      在)+ server/app/api/chat.py + 记忆语义(`core/memory.py` 那条"compact
+    #      是派生物、先进不进记忆"的注释,要一起定);④ 删它的前置条件:确认不做
+    #      UI 侧开关(docs/tasks/PROGRESS.md 那条"摘要开关置灰占位"一并撤)。
     enable_summarize: bool | None = None  # ⏳ 摘要压缩 = 未来 compact(DESIGN §9)
 
 
@@ -76,14 +115,18 @@ async def chat_stream(request: Request, body: ChatRequest):
     queue: asyncio.Queue = asyncio.Queue()
 
     def _put(item) -> None:
-        """线程 → 事件循环:非阻塞投递(loop 关闭边缘忽略)。"""
+        """线程 → 事件循环:非阻塞投递(loop 关闭边缘忽略)。
+
+        直接当 on_chunk 传给内核:回调契约是 `Callable[[dict], None]`
+        (`core/loop.py` 的 `run_turn`/`_step` 形参 `on_chunk`,调用点 `cb(chunk)`)
+        —— 一个位置参数完全对得上,原来外面套的那层
+        `def on_chunk(chunk): _put(chunk)` 纯转发已删(删前 grep:全仓只此一处定义、
+        只此一处被 run_turn 使用)。
+        """
         try:
             loop.call_soon_threadsafe(queue.put_nowait, item)
         except RuntimeError:
             pass  # 事件循环已关(进程退出边缘)
-
-    def on_chunk(chunk: dict) -> None:
-        _put(chunk)
 
     def _run():
         try:
@@ -122,14 +165,16 @@ async def chat_stream(request: Request, body: ChatRequest):
                     "model": body.model,
                 })
                 engine._loop.run_turn(
-                    message, source="user", log=log, on_chunk=on_chunk,
+                    message, source="user", log=log, on_chunk=_put,
                     temperature=eff["temperature"],
                     model=eff["model"],
                     max_rounds=eff["max_rounds"],
                     system_prompt=eff["system_prompt"],
                 )
+                # save_log 已自带 updated_at(store._save_log 落完日志就重写
+                # meta.updated_at,与 touch_session 做的是同一件事),所以后面
+                # 原那句 engine._store.touch_session(sid) 是重复的读+写,已删。
                 engine._store.save_log(sid, log)
-                engine._store.touch_session(sid)
 
             t_turn0 = time.time()
             # 优先级**看目标卡**(2026-09-17 拍板):还没补完 → 排在它的补写后面;

@@ -73,7 +73,7 @@ _MEMORY_ITEM = "{time} {text}"
 # (composer 会再拼一次 → `- recall: recall:…`),还留着把日期写进 query 的老话。
 # **两条都会真的改变她的行为。** 现在全部收在这里,其它探针 import。
 #
-# 通道:**工具 description / usage 都不插值**(core/composer.py:120 是 f-string),
+# 通道:**工具 description / usage 都不插值**(core/composer.py 的 `make_usage_section` 里 `_usage_text` 是 f-string),
 # 所以这一整块里**一个称呼都不能出现**;{owner} 会原样漏给模型。
 # ============================================================
 
@@ -347,7 +347,7 @@ RECALL_USAGE_S1 = RECALL_USAGE + (
 # 第三项可省 —— 省略 = 用定稿的 RECALL_PARAM_SCOPE。
 #
 # ⚠️ **用 `variant_parts()` 取,别直接解包**:2026-09-20 加了"能改参数说明"这条轴
-#    (schema 与 usage 是**两条不同的通道**,core/tools.py:20-24),于是有的变体
+#    (schema 与 usage 是**两条不同的通道**,core/tools.py 的 `Tool` docstring),于是有的变体
 #    是 2 元组、有的是 3 元组。直接 `desc, usage = RECALL_VARIANTS[k]` 会在
 #    3 元组上炸 —— 这是纯机械的错,别让它在四个消费点各炸一次。
 RECALL_VARIANTS: dict[str, tuple[str, str]] = {
@@ -667,7 +667,7 @@ CREATE INDEX idx_mem_kind ON memory(session_id, kind, time);
 
 def build_db(rows: list[dict], embedder=None) -> sqlite3.Connection:
     # ⚠️ `check_same_thread=False` 是**必须的,不是图方便**(2026-09-19 端到端实测踩到):
-    # `core/loop.py:428` 里,同一个 step 只要**有两个以上**工具调用就走
+    # `core/loop.py` 的 `_execute_tools()` 里,同一个 step 只要**有两个以上**工具调用就走
     # ThreadPoolExecutor —— 而 sqlite3 默认 check_same_thread=True,连接一旦在
     # 别的线程里用就抛 ProgrammingError。症状极具欺骗性:模型一次问两件事
     # (很常见),两次 recall **同时**死掉,工具老老实实报 down,她就说
@@ -693,10 +693,19 @@ R_EMPTY = "empty"        # 服务正常,确实没有相关的  → 不许说"想
 R_DEGRADED = "degraded"  # 退而求其次(语义路塌了 / query 没给)
 R_DOWN = "down"          # 检索整个跑不起来        → 示弱,别硬猜
 
-# **只挡明显无关的地板**,不是"相关性判据"(2026-09-19 实测证伪:
-# 同一件事换措辞,bi-encoder 分数在 0.358~0.422 之间横跳,硬判会误杀正确答案)。
-_FLOOR = 0.25             # < 这个数基本可以确定不相关(bge-large-zh 实测 0.216)
-_GREY_TOP = 0.45          # < 这个数 → 给结果,但**标明不确定**
+# ⚠️ 这里与**产品版**（`character/tools.py` 的 `_FLOOR`）口径**必须一致**，改之前先读那一份。
+#
+# 【2026-09-22 同步】产品侧已实测裁决：这个地板**不接线**，而且不该接 ——
+#   `test/recall_bench.py --corpus both` 的「余量（纯余弦，闸门口径）」：
+#     hard(48 条) 负例最高 0.338 vs 可答最低 0.481/0.499 → ✅ 分开
+#     big(315 条) 负例最高 0.439 vs 可答最低 0.395/0.206 → ❌ **重叠**
+#   一条真答案（语料里的「B-412」）最高余弦只有 0.206，0.25 的地板会把它
+#   **当成"确实没有"挡掉**；负例那头的 0.439 它也挡不住。
+# → 结论：**没有正提升、有负提升**。产品路径 `min_score=None`（装配处不传）。
+#   本探针仍把它当**实验变量**在用（`--thr` 那一段），那是标定草图，不是产品行为。
+#   ⛔ 旧注释「< 这个数基本可以确定不相关」**已作废**，别再引用。
+_FLOOR = 0.25             # ⏸ 实验用常量，产品不接线（理由见上）
+_GREY_TOP = 0.45          # < 这个数 → 给结果，但**标明不确定**（这条产品在用）
 
 
 def make_recall_tool(
@@ -857,10 +866,14 @@ def make_recall_tool(
 
     _WHY_TEXT = {"no_query": "你没说清找什么",
                  "semantic_failed": "检索这一步没跑成",
-                 "bad_scope": "你给的范围我不认识,按全部找了",
-                 "day_fallback": "你写的那天没有记录"}
-    # 这三种是"退了时间序",措辞要说清下面是什么;bad_scope 不是。
+                 "bad_scope": "你给的范围我不认识,按全部找了"}
+    # 这两种是"退了时间序",措辞要说清下面是什么;bad_scope 不是。
     _TIME_FALLBACK = ("no_query", "semantic_failed")
+    # 【2026-09-22 删】原来还有一个 "day_fallback" 键 + 它专属的渲染分支。
+    #   那是**不可达死代码**:`_run()` 从来不产出 `why == "day_fallback"`
+    #   (枚举全部赋值点只有 no_query / semantic_failed / bad_scope / day_empty / "")——
+    #   那次语义改写把它换成了 `(R_EMPTY, "day_empty")`,旧分支忘了删。
+    #   产品版 `character/tools.py` 同步删了同一段(两份副本必须一致)。
 
     def _render(r: dict) -> str:
         return _render_body(r) + (_BOUNDARY_RECALL if boundary else "")
@@ -892,13 +905,8 @@ def make_recall_tool(
             return (f"[回忆] 关于「{q}」没有查到。这是**确实没有相关的事**,"
                     "不是你想不起来 —— 别为它编内容。")
         lines = [f"{it['time']} {it['text']}" for it in items]
-        if r["state"] == R_DEGRADED and r["why"] == "day_fallback":
-            # 她说了一个日期、那天没记录,但去掉过滤**能查到东西**。
-            # 措辞必须两头都说清:那天确实没记 + 下面这些**不是那天的**。
-            head = (f"[回忆] 「{r['day']}」这段时间**没有记录**。"
-                    f"下面这几条是**前后**的事 —— 别当成那天的,"
-                    "先看看是不是你要找的:")
-            return head + "\n" + "\n".join(lines)
+        # 【2026-09-22 删】这里原来有一段 `R_DEGRADED + why == "day_fallback"` 的渲染,
+        #   不可达(见 _WHY_TEXT 上方的说明),与产品版同步删掉。
         if r["state"] == R_DEGRADED:
             mid = ("下面只是那段时间前后的事 —— " if r["why"] in _TIME_FALLBACK
                    else "")
@@ -952,8 +960,10 @@ def make_recall_tool(
             "required": ["query"],
         },
         func=_recall,
-        # ⚠️ usage **不在这里传**:它进 SYSTEM 段落,由装配处(探针的 build_apparatus /
-        # 产品的 engine)统一贴。贴的就是上面那份 RECALL_USAGE —— 单一来源。
+        # ⚠️ usage **不在这里传**:探针这件的 usage 由**消费方**贴(test/recall_e2e.py 的
+        # `build_apparatus()` 里那句 `.usage = usage`)。贴的就是上面那份 RECALL_USAGE —— 单一来源。
+        # ⚠️ 这只说探针这件:**产品版** `character/tools.py` 的 `make_recall_tool`
+        # 是**自带** `usage=RECALL_USAGE` 的,engine 一个字都不贴 —— 别把两边当成一回事。
     )
     tool.run_structured = _run  # 探针自用:测试直接断言结构化结果
     return tool

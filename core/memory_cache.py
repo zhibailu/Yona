@@ -145,8 +145,10 @@ class MemoryCache:
         self.retry_backoff = retry_backoff
         self.max_warm_attempts = max_warm_attempts
         # check_same_thread=False:同一 step 的 ≥2 个工具调用跑在
-        # ThreadPoolExecutor 里(core/loop.py:428),连接要能被别的线程用。
+        # ThreadPoolExecutor 里(core/loop.py 的 `_run_tools()` 里
+        # `with ThreadPoolExecutor(max_workers=len(calls))`),连接要能被别的线程用。
         # 串行化交给下面这把锁,不交给 sqlite。
+        # ⚠️ 行号引用请连着符号写:loop.py 那一段因注释增删飘过。
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._db_lock = threading.RLock()
         self._running = False
@@ -253,6 +255,15 @@ class MemoryCache:
         """返回 `(rows, vecs)`,**按下标对齐**;没补上向量的位置是 None。
 
         交给 `MemoryIndex(rows, embedder, vecs=vecs)` —— 已补齐的行不再重算。
+
+        ⏸ **这里就是"读侧把 kind 丢掉"的那一行**:下面 SELECT 已经把
+        `vec_kind` 取回来了(变量 `vk`),`_unpack` 用它决定怎么解包,然后
+        **kind 本身就不往后传了** —— 返回的只有 `rows` + `vecs`。
+        后果见 `core/memory.py` 的 `_dot`:它拿不到 kind,遇到"一侧稠密 list、
+        一侧稀疏 dict"只能返回 0.0(静默)。将来真接闸门/换嵌入器时,
+        要在这里把 kind 一起带出去(如返回 `(rows, vecs, kinds)` 或让
+        `MemoryRow` 带一个字段)—— 完整手术位置写在 `core/memory.py: _dot`。
+        现在**不要动**:改判据会让"混合库"的行为可见变化,那是产品决策。
         """
         with self._db_lock:
             cur = self._conn.execute(
@@ -277,7 +288,13 @@ class MemoryCache:
     # ---------- 后台补向量(吃性能剩饭) ----------
 
     def start(self) -> None:
-        if self._running:
+        """起后台线程。**同一时刻只许有一条**(两条会并发写同一个 sqlite 库)。
+
+        ⚠️ 守卫要同时看两件事(2026-09 修正):`_running` 是"被要求跑",
+        线程本身还活着则是"事实上还在跑" —— 只判前者不够,因为 `stop()` 可能
+        join 超时(见 stop 的说明)而线程仍在收尾,此时 `_running` 已是 False。
+        """
+        if self._running or (self._thread is not None and self._thread.is_alive()):
             return
         self._running = True
         self._thread = threading.Thread(
@@ -286,11 +303,26 @@ class MemoryCache:
         self._thread.start()
 
     def stop(self, timeout: float = 2.0) -> None:
+        """停后台线程。**签名保持不变**(`stop(timeout=...)` 的调用方只有
+        `server/app/engine.py`,不动它的调用方式)。
+
+        ⚠️ **join 超时 ≠ 线程停了。** 本线程第一件事是暖机,实测 **4.18 s**
+        (见模块头),而默认 `timeout=2.0` —— 正好落在暖机中间时,`join` 会
+        超时返回,而线程**还活着**(它要等 `warm()` 返回、走到循环条件才肯退)。
+
+        所以这里只在**确认停了**之后才清 `_thread`(2026-09 修正):
+        - 无条件 `self._thread = None` 会把"线程还在"这件事从对象上抹掉 ——
+          `close()` 紧接着关 sqlite,而那条线程回来还要写库;
+        - 保留 `_thread` 让"还有一条线程"这个事实一直可见,`start()` 的守卫
+          (`_thread.is_alive()`) 因此继续有效,起不出第二条线程。
+        线程自己会在暖机结束、回到 `while self._running` 时看到 False 而退出。
+        """
         self._running = False
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
-            self._thread = None
+            if not self._thread.is_alive():
+                self._thread = None
 
     def close(self) -> None:
         self.stop()
@@ -306,7 +338,15 @@ class MemoryCache:
             if not self._warmed:
                 self.warm()
                 if self._embedder_dead:
-                    return          # 拿不到模型 → 这个线程没活可干了
+                    # 拿不到模型 → 这个线程没活可干了,退出。
+                    # ⚠️ 退出前**必须把 `_running` 跟着落下来**(2026-09 修正)。
+                    #    不落的话:`status()["running"]` 会**永远报"在跑"**,
+                    #    而线程其实早死了 —— 排障时这是最误导的一种,
+                    #    人会一直等一个不会来的补齐(症状是"新聊的事搜不到"
+                    #    却看着后台在跑)。另外 `start()` 的守卫是
+                    #    `if self._running: return`,所以不落它连**起都起不回来**。
+                    self._running = False
+                    return
                 if not self._warmed:
                     self._wake.wait(self.poll)
                     self._wake.clear()
@@ -425,6 +465,42 @@ class MemoryCache:
             self.guard.release()
 
     def status(self) -> dict:
+        """本卡索引的现场快照(路径/总数/欠账/降级原因)。
+
+        ⏸ **占位:模块头把"降级原因要留在 `status()`"当设计承诺,而它在产品里
+        没有任何出口。**(2026-09 清理时如实标注,不搬不删。)
+
+        ① 现状:`grep` 全仓,产品路径**零调用**(唯一读它的是测试)。于是下面
+           四份记账**写完没人读**,纯属"记了但没人看的账":
+           - `self._done`          —— `fill_one()` 里 `self._done += 1`
+           - `self._errors`        —— `_loop()` 的 except 分支、`warm()` 的
+                                      except 分支、`fill_one()` 的 except 分支
+           - `self._last_error`    —— 同上三处(`f"warm: {type(exc).__name__}: {exc}"`)
+           - `self._warm_attempts` —— `_loop()` → `warm()` 里 `+= 1`,并与
+                                      `self.max_warm_attempts` 比较
+           `warm()` 的 docstring 说"拿不到模型 = 降级成纯关键词,**并把原因留在
+           status()** —— 静默退化会让'她记性变差'看起来像模型的问题" ——
+           这句话本身是对的,缺口在于**那句话没有任何人读**。
+        ② 为什么留着:它是排"降级成纯关键词"现场的**唯一出口**。没有它,产品
+           发生"没有 torch / 暖机三连失败"时,外面能看到的只有"搜不到东西",
+           查不到真因 —— 而这个模块整段的关切就是"别让退化静默"。删掉等于把
+           唯一的观测口也删了,那比留着更坏。
+        ③ 什么条件才启用:接一个**读它的出口** —— 最小的是一个排障端点
+           (如 `/admin/memory/<sid>`,形状可照 `server/app/api/view.py` 的
+           `/admin/life-events` 那种只读端点),或把它并进引擎的启动日志。
+           接线之前,它的字段一旦改名/删掉都无所谓;接线之后就是**契约**
+           (UI/排障会读),改字段要连带改消费方。
+        ④ 将来手术要删哪些:(a) 本函数整个(签名 + docstring + return 那个 dict);
+           (b) 上面四份记账的**全部写入点**(`_done` / `_errors` / `_last_error` /
+           `_warm_attempts` 的 `+= 1` 与赋值);(c) `__init__` 里这四个字段的
+           初始化(`self._done = 0` / `self._errors = 0` / `self._last_error = None`
+           / `self._warm_attempts = 0`);(d) `warm()` 里与
+           `max_warm_attempts` 的比较**不能一起删** —— 那是真判据,
+           只是把"到没到上限"从"记账"降成"局部判断"。
+           ⚠️ 配套:`counts()` 是 `status()` 唯一会**顺带被删**的东西?不是 ——
+           `counts()` 另有调用方(**产品** `server/app/engine.py` 的 `recall_index()` 里
+           `cache.counts()` 拿它当索引缓存键,以及一批测试),别跟着删。
+        """
         c = self.counts()
         return {
             "path": str(self.path),

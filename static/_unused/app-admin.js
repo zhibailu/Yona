@@ -1,3 +1,27 @@
+        // ===========================================================================
+        // ⏸ 隔离区占位 —— 这个文件**不参与运行**,别当活代码读。
+        //
+        // 它是什么:旧 Yona UI 的"操作菜单"脚本,原样搬来这里,一个字没改。
+        //
+        // 为什么在这里(不是遗漏,是有意的决定):
+        //   · `static/index.html` 的 <script> 列表里**没有它**(全仓引用数 0);
+        //   · 它调的四个后端端点**都不存在** —— /admin/stats、/admin/rebuild-vector、
+        //     /admin/export、/admin/clean-empty(在 `server/` 全量 grep 命中 0);
+        //   · 记录见 `docs/STRUCTURE.md` §4 两处("已剪 UI 入口,后端没有对应能力"
+        //     / "按钮随 app-admin.js 移 static/_unused/")。
+        //   → 留着的**唯一**价值:那四个能力将来真要做时,这里有现成的按钮/交互形状。
+        //
+        // 什么时候可以干净删掉(手术步骤):
+        //   1. 确认"管理端点(stats / rebuild-vector / export / clean-empty)"这条路线
+        //      **不再考虑** —— 见 `docs/STRUCTURE.md` §4 的处置表;
+        //   2. 删本文件,并把 `static/_unused/` 这个空目录一起删掉
+        //      (它是为隔离这类文件建的,空了就不该留);
+        //   3. 同步删 `docs/STRUCTURE.md` §2 目录树里提到 `_unused/` 的那半句,
+        //      以及 §4 处置表里 `app-admin.js` 那一行。
+        //   ⚠️ 删之前确认没有仓库外的脚本引用 `static/_unused/app-admin.js`
+        //      (仓库内已经确认 0 引用)。
+        // ===========================================================================
+
         // ========== 操作菜单 ==========
         function toggleActionMenu() {
             const menu = document.getElementById('action-menu');
