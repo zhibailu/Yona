@@ -365,6 +365,11 @@ class SessionLog:
         UI"保留最近 N 轮对话"即此语义;last_n 仍是粗暴的消息尾截,保留给
         调用方自行选择。
 
+        ⚠️ **独处轮(自走 / 补写)不占这个名额**(2026-09-21 用户拍板):
+        它是**记忆**,取用走 `recall` 工具 —— 窗口是**对话窗口**,只数真人对白轮。
+        不这样做的实测:19 个自走轮 + 4 段真人对白的卡,`max_rounds=20` 时
+        4 段里有一段看不见,`=10` 时只剩 2 段(自走轮吃了名额却不产出消息)。
+
         user_time_prefix(2026-09-17 加):真人消息前拼一行「模板(含 {time})」
         再接正文,{time} = 那条消息发生的时刻。**历史里没有时间轴** ——
         每条消息都不带时刻,`[当前时间]` 每轮被覆盖、历史不留痕,于是
@@ -403,10 +408,17 @@ class SessionLog:
         }
         # last_turns 轮窗口:允许的轮 = 最近 N 个已结束轮 + 所有未结束轮
         # (当前在跑/被打断没 turn/end 的轮永不裁)。None/0 = 全量。
+        #
+        # ⚠️ **独处轮不占名额**(2026-09-21 用户拍板;理由早就给过 —— "自走轮是
+        #   等着 tool 召回的,就是个普通的文本",它是**记忆**不是**对话**)。
+        #   窗口是**对话窗口**,所以只数真人对白轮。
+        #   不这样做的后果有实测:这张卡 19 个自走轮 + 4 段真人对白,
+        #   `max_rounds=20` 时 4 段里就有一段看不见,`=10` 时只剩 2 段
+        #   —— 自走轮**吃了名额却不产出任何消息**,纯粹挤掉对话。
         allowed_turns: set[int] | None = None
         if last_turns:
-            ordered_ended = sorted(ended_turns)
-            allowed_turns = set(ordered_ended[-last_turns:]) if ended_turns else set()
+            ordered_ended = sorted(t for t in ended_turns if t not in self_turns)
+            allowed_turns = set(ordered_ended[-last_turns:]) if ordered_ended else set()
             for e in self._events:
                 t = e.data.get("turn")
                 if isinstance(t, int) and t not in ended_turns:

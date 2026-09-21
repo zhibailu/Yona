@@ -456,6 +456,44 @@ def test_agent_loop_passes_user_time_prefix_down():
     assert [m for m in msgs2 if m["role"] == "user"][0]["content"][0]["text"] == "问1"
 
 
+def test_self_turns_do_not_consume_the_window():
+    """**窗口是对话窗口,独处轮不占名额**(2026-09-21 用户拍板)。
+
+    理由用户早就给了:「自走轮是等着 tool 召回的,就是个普通的文本」——
+    它是**记忆**不是**对话**。所以"保留最近 N 轮"只数真人对白。
+    不这样做的实测代价:19 个自走轮的卡,`max_rounds=20` 时 4 段真人对白
+    里有一段看不见,`=10` 时只剩 2 段 —— 自走轮吃了名额却**不产出任何消息**。
+    """
+    log = SessionLog("t")
+    _append_completed_turn(log, 1)                       # 真人对白 1
+    for i in (2, 3, 4):                                   # 中间插三个独处轮
+        _append_completed_self_turn(log, i, f"独处第{i}件。", at=T0 + i * 100)
+    _append_completed_turn(log, 5)                        # 真人对白 5
+
+    # 窗口 = 最近 1 轮**对话** → 只该剩第 5 轮;三个独处轮一个都不许占位
+    msgs = log.derive_messages(last_turns=1)
+    texts = [m["content"][0]["text"] for m in msgs]
+    assert texts == ["问5", "答5"], texts
+    assert not any("独处第" in t for t in texts), texts
+
+    # 窗口 = 最近 2 轮对话 → 两段真人对白都回来(独处轮不插队)
+    msgs2 = log.derive_messages(last_turns=2)
+    texts2 = [m["content"][0]["text"] for m in msgs2]
+    assert texts2 == ["问1", "答1", "问5", "答5"], texts2
+
+
+def test_self_turns_still_never_show_even_with_a_wide_window():
+    """对照组:`last_turns` 给大(甚至全量)时,独处轮也**不许**冒出来 ——
+    它们是被"整条不进投影"拿掉的,不是靠窗口裁掉的,两件事各管各的。"""
+    log = SessionLog("t")
+    _append_completed_turn(log, 1)
+    _append_completed_self_turn(log, 2, "我自己待着。", at=T0 + 100)
+    for mr in (None, 0, 50):
+        texts = [m["content"][0]["text"] for m in log.derive_messages(last_turns=mr)]
+        assert not any("我自己待着" in t for t in texts), (mr, texts)
+        assert "问1" in texts, (mr, texts)
+
+
 def test_ended_self_turn_never_reaches_the_context():
     """**已结束的独处轮整轮不进上下文**(2026-09-21 用户拍板)。
 
@@ -498,6 +536,13 @@ def test_running_self_turn_still_sees_its_own_earlier_steps():
     assert [m["role"] for m in msgs] == ["user", "assistant", "tool", "assistant"], msgs
     assert any(b.get("type") == "tool-call"
                for b in msgs[1]["content"] if isinstance(b, dict)), msgs[1]
+
+    # ⚠️ 窗口再窄也不许把它裁掉 —— 独处轮不占名额,而**进行中**的轮本来就永不裁。
+    #    这一格是"窗口只数真人对白"最危险的交叉点:稍不留神就把当前轮也滤没了。
+    for mr in (1, 2):
+        narrow = log.derive_messages(last_turns=mr)
+        assert [m["role"] for m in narrow] == \
+            ["user", "assistant", "tool", "assistant"], (mr, narrow)
 
 
 def test_derive_messages_has_no_life_event_injection_knob_left():
@@ -636,6 +681,8 @@ if __name__ == "__main__":
     test_user_time_prefix_only_covers_the_window()
     test_user_time_prefix_labels_first_text_block_only()
     test_agent_loop_passes_user_time_prefix_down()
+    test_self_turns_do_not_consume_the_window()
+    test_self_turns_still_never_show_even_with_a_wide_window()
     test_ended_self_turn_never_reaches_the_context()
     test_running_self_turn_still_sees_its_own_earlier_steps()
     test_derive_messages_has_no_life_event_injection_knob_left()
