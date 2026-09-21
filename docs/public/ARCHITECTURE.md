@@ -44,7 +44,7 @@ The three are cleanly layered: `core/` knows nothing about "life"; `server/` com
 └─────────────────────────────────────────────────────────────┘
 ```
 
-> 【2026-09-21 23:25 更正】上图漏了一整级(composer)和整个记忆层。 —— 真相:`core/composer.py`(182 行,`SystemSection`,engine.py:31 导入)、`core/memory.py`(300)、`core/memory_cache.py`(389)、`core/embed.py`(175)、`core/subrun.py`(335)、`server/app/api/config.py`(预设 CRUD + 模型发现,main.py:33 `from .app.api import chat, config, media, view`)都存在。
+> 【2026-09-21 23:25 更正】上图漏了一整级(composer)和整个记忆层。 —— 真相:`core/composer.py`(182 行,`SystemSection`,即 `server/app/engine.py` 里 `from core.composer import SystemSection, make_timeline_section` 那一行导入)、`core/memory.py`(300)、`core/memory_cache.py`(389)、`core/embed.py`(175)、`core/subrun.py`(335)、`server/app/api/config.py`(预设 CRUD + 模型发现,`server/main.py` 里 `from .app.api import chat, config, media, view` 那一行)都存在。
 
 ---
 
@@ -55,7 +55,12 @@ The three are cleanly layered: `core/` knows nothing about "life"; `server/` com
 - `append(type, **data)` — appends an immutable, `seq`-numbered event.
 - Events are organized on `turn/step` boundaries: `turn/start`, `user/message`, `assistant/message`, `tool/call`, `tool/result`, `step/start`, `step/end`, `turn/end`, plus annotation events like `surface/shadow`.
 - `derive_messages()` — **projects** the log into the `messages` fed to the model. Projection ≠ the log itself.
-- `replay_from(seq)` — replay from any point (crash recovery / resumption).
+- `replay_from(seq)` — replay from any point. ⚠️ **Not what production uses for recovery**: resumption/recovery goes through a **full re-read** of the log (`SessionLog.from_lines` / `server/store.py` 的 `_load_log`), never an incremental replay — `replay_from` is called **only by tests** today, and the 2026-09 cleanup left a placeholder note on it in `core/session_log.py`。
+
+> 【2026-09-21 23:45 更正】本节原写 `replay_from(seq)` — replay from any point (**crash recovery / resumption**),
+> 把"生产会用增量回放做恢复"写成了事实 —— **不成立**(见上一行)。占位标注原文在 `core/session_log.py`:
+> 「⏸ **占位:docstring 里那句"用于崩溃恢复/续跑"是承诺,生产没接这个口子**」;真正在重读整份日志的是
+> `server/store.py` 的 `_load_log`。
 
 ### Why append-only is right
 
@@ -95,7 +100,7 @@ while step < max_steps:
 
 **Only one turn at a time** (internal lock): a character does one thing at a time. If a user message arrives while a background turn runs, "it's busy" is a feature, not a bug. Since 2026-09-17 all four turn sources go through one queue (`_submit_turn`, single `yona-turn` worker) — never concurrent. Priority: a card still being backfilled keeps its slot ahead of a user message sent to it; otherwise `user` > `self`. The loop keeps its own turn lock as a second line of defence.
 
-> 【2026-09-21 23:25 更正】原文只写"internal lock",机制已变成"队列 + 单 worker + 优先级插队",而优先级规则是明确拍板的产品语义。 —— 真相:`server/app/engine.py:328-341`(四来源统一 `_submit_turn`);`engine.py:340-341` `_QUEUE_USER = 0` / `_QUEUE_SELF = 1`;`engine.py:428-431` `user_turn_priority()`(该卡还在补写 → user 排在补写之后);`core/loop.py:91` 的 turn 锁仍在(单个 loop 内互斥那层没错)。
+> 【2026-09-21 23:25 更正】原文只写"internal lock",机制已变成"队列 + 单 worker + 优先级插队",而优先级规则是明确拍板的产品语义。 —— 真相:`server/app/engine.py` 的 `_submit_turn`(四来源统一入口);`_QUEUE_USER = 0` / `_QUEUE_SELF = 1`;`server/app/engine.py` 的 `user_turn_priority()`(该卡还在补写 → user 排在补写之后);`core/loop.py` 的 `AgentLoop` 里 `self._turn_lock` 的 turn 锁仍在(单个 loop 内互斥那层没错)。
 
 **System is assembled per step**: persona/state/world/tool-usage are injected by a builder at the composition layer, able to inspect `(registry, source, log)` to detect backfill vs. normal turns and switch the time source.
 
@@ -156,13 +161,13 @@ set the log's time cursor
 
 Key: **backfill = the replay of an autonomous turn**, not a second persona and not a second AgentLoop. Same card, same loop — only the **time is jumping**. Backfill gets no live tools (those days shouldn't "check the weather now").
 
-> 【2026-09-21 23:25 更正】原文只讲"这张卡"补写,漏了 2026-09-17 的拍板:补写对象是**所有有历史的卡**。 —— 真相:`server/app/engine.py:1137-1147`「启动时遍历**所有有历史的卡**,按**离线间隔升序**(= `updated_at` 降序)一张一张来 —— 当前卡天然第一」;`server/store.py:214` `def life_backfill_order`;阈值 = `params.WAKE_AFTER_GAP_SECONDS`(30 min,`server/params.py:53`)。
+> 【2026-09-21 23:25 更正】原文只讲"这张卡"补写,漏了 2026-09-17 的拍板:补写对象是**所有有历史的卡**。 —— 真相:`server/app/engine.py` 的 `_maybe_backfill_life` docstring「启动时遍历**所有有历史的卡**,按**离线间隔升序**(= `updated_at` 降序)一张一张来 —— 当前卡天然第一」;`server/store.py` 的 `def life_backfill_order()`;阈值 = `params.WAKE_AFTER_GAP_SECONDS`(30 min,`server/params.py` 的 `WAKE_AFTER_GAP_SECONDS`)。
 
 ### 5.4 Per-card life: life belongs to "that card"
 
 There is no longer an anonymous global life stream. Life belongs to **the card you're actively talking to**: a heartbeat wake means that card is awake; its autonomous events are written into its own log (invisible in chat view — the inner-thought panel reads them straight from the log, and the model only sees them when she calls the `recall` tool; life events no longer sit in the prompt at all). Deleting a card archives it first; the flagship card falls back and auto-rebuilds.
 
-> 【2026-09-21 23:25 更正】原文说生活事件"model context 也看得见",已被 2026-09-21 拍板推翻。 —— 真相:`core/session_log.py:340-355`「生活事件不进投影(2026-09-21 用户拍板)」,已结束的**独处轮**的 assistant 消息**整条跳过**;`server/app/engine.py:925-926`「⚠️ 这里**没有** life_event_prefix(2026-09-21 拆除):生活事件整条不进投影,取用路径只剩 `recall` 工具」;聊天视图隐藏 = `server/store.py:301-303`;取用 = `character/tools.py` 的 `make_recall_tool`(`engine.py:294` 注册)。
+> 【2026-09-21 23:25 更正】原文说生活事件"model context 也看得见",已被 2026-09-21 拍板推翻。 —— 真相:`core/session_log.py` 的 `derive_messages()`(「生活事件不进投影(2026-09-21 用户拍板)」,已结束的**独处轮**的 assistant 消息**整条跳过**);`server/app/engine.py` 里那句注释「⚠️ 这里**没有** life_event_prefix(2026-09-21 拆除):生活事件整条不进投影,取用路径只剩 `recall` 工具」;聊天视图隐藏 = `server/store.py` 的 `_messages_view()`;取用 = `character/tools.py` 的 `make_recall_tool`(`server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行注册)。
 
 ---
 
@@ -172,7 +177,7 @@ One of the project's strongest layering disciplines:
 
 - **`character/personas.py` = content layer** — who it is (PERSONA), what situation this turn is (CHAT/SELF situation), system voice, and how the `[time budget]` sentence is phrased. **Copy lives in the character layer, and only there:** `personas.py` (persona, situations, SYSTEM templates such as `[time budget]`) and `tools.py` (each tool's `description` / `usage`). The engine only composes.
 
-> 【2026-09-21 23:25 更正】原文"Want to change copy? Change only this file"不成立:工具侧文案住在 `tools.py`。 —— 真相:`character/tools.py` 的 `RECALL_DESC`(:193)、`RECALL_USAGE`(:209)、`RECALL_PARAM_QUERY`(:219)、`RECALL_PARAM_SCOPE`(:245)、`_launch_usage`(:36),经 `core/composer.py:120` 渲染进 SYSTEM;`personas.py` 侧只有 `PERSONA` / `CHAT_SITUATION` / `SELF_SITUATION` / `WAKE_BUDGET_TEMPLATE`(:140)/ `USER_TIME_PREFIX`(:132)/ `LIFE_EVENT_PREFIX`(:115)。
+> 【2026-09-21 23:25 更正】原文"Want to change copy? Change only this file"不成立:工具侧文案住在 `tools.py`。 —— 真相:`character/tools.py` 的 `RECALL_DESC`、`RECALL_USAGE`、`RECALL_PARAM_QUERY`、`RECALL_PARAM_SCOPE`、`_launch_usage`,经 `core/composer.py` 的 `make_usage_section()` 渲染进 SYSTEM;`personas.py` 侧只有 `PERSONA` / `CHAT_SITUATION` / `SELF_SITUATION` / `WAKE_BUDGET_TEMPLATE` / `USER_TIME_PREFIX` / `LIFE_EVENT_PREFIX`。
 
 - **Engine only composes.** engine feeds copy to the section factory to build SYSTEM. A system-voiced sentence appearing in engine code = a boundary violation (it happened once; already fixed).
 - **Persona ≠ a property of the turn.** Chat / solitude / backfill are the *same character* sharing one PERSONA; each turn only adds its situation section. Never rewrite identity per trigger.
@@ -197,7 +202,7 @@ Vision: observability first, not the front-end. You can watch the agent "think" 
 - Backlog (documented decisions, deliberately not prioritized): rerank / retrieval-quality work (the similarity-threshold route was tested and falsified), character preset packs, voice & senses, eval.
 - Details: [ROADMAP.md](./ROADMAP.md).
 
-> 【2026-09-21 23:25 更正】原文把 long-term memory 留在 Backlog,已过时 —— 它已上线;真正被**证伪而未采用**的是阈值 / rerank 那条。 —— 真相:recall 已进产品(同 §5.4,`server/app/engine.py:294` 注册);阈值 / rerank 被证伪见 `docs/decisions/TIMELINE.md` 的「2026-09-19 · 往事段 + recall 工具」§二「⚠️ 阈值那条路**已被实测证伪**」。
+> 【2026-09-21 23:25 更正】原文把 long-term memory 留在 Backlog,已过时 —— 它已上线;真正被**证伪而未采用**的是阈值 / rerank 那条。 —— 真相:recall 已进产品(同 §5.4,`server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行注册);阈值 / rerank 被证伪见 `docs/decisions/TIMELINE.md` 的「2026-09-19 · 往事段 + recall 工具」§二「⚠️ 阈值那条路**已被实测证伪**」。
 
 ---
 

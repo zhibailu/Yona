@@ -15,7 +15,8 @@
 > **2026-09-17 再修订(用户逐点拍板,详见 DESIGN §12b 尾注 + LIFE_BACKFILL §9)**:
 > - 补写**遍历所有有历史的卡**(不再是"只补最近激活那一张");
 > - **每卡独立作息**取代"全局单套闸门"(原句已废);(**✅ 已拍未落地**:`_life_gate` / `_heartbeat` 的持有点仍是全局一个,见 LIFE_BACKFILL §9.7 与 DESIGN §12b 尾注)
->   【2026-09-21 23:30 更正】原文与同段的"补写遍历所有卡""turn 队列"并列,读起来都是已完成 —— 真相:每卡独立作息只是**已拍、未落地**:`docs/protocols/LIFE_BACKFILL.md:529`「### 9.7 ✅ 已定:每卡独立作息」+ `:564`「每卡独立作息持有点(§9.7)| `_life_gate` / `_heartbeat` 每卡一份 | ⏳ **暂不做**」;`docs/decisions/TIMELINE.md` 09-17「收口决定…**暂不做,后面有需求再说**」;`server/params.py:59-61` 的作息参数仍是**全局单套**(`SELF_WAKES_PER_DAY` / `HEARTBEAT_COOLDOWN_SEC` / `HEARTBEAT_INTERVAL_SEC`);DESIGN §12b 尾注也标着"②③ 暂不落地"。
+>   【2026-09-21 23:30 更正】原文与同段的"补写遍历所有卡""turn 队列"并列,读起来都是已完成 —— 真相:每卡独立作息只是**已拍、未落地**:`docs/protocols/LIFE_BACKFILL.md` 的「### 9.7 ✅ 已定:每卡独立作息」一节,以及该节「每卡独立作息持有点(§9.7)| `_life_gate` / `_heartbeat` 每卡一份 | ⏳ **暂不做**」那张表;`docs/decisions/TIMELINE.md` 09-17「收口决定…**暂不做,后面有需求再说**」;`server/params.py` 的作息参数仍是**全局单套**(`SELF_WAKES_PER_DAY` / `HEARTBEAT_COOLDOWN_SEC` / `HEARTBEAT_INTERVAL_SEC`);DESIGN §12b 尾注也标着"②③ 暂不落地"。
+>   ⚠️ 引的是**节名/表格名**,不是行号 —— 2026-09-22 把全仓行号指针改成符号锚点,理由见 `docs/README.md` 的写文档规则。
 > - 四个来源(聊天/心跳/补写/脉冲)统一走 **turn 队列**(user 按目标卡插队),
 >   "多卡并行 = 多进程"不再成立;
 > - 决策 7 里那句"**subagent 增强 = 未来倾向,不做**" **已过时** ——
@@ -80,8 +81,8 @@
      补齐轮(source=self),"她补上错过的时间",提示复用 doing 态。
    - 间隔抖动/启动延迟/前台让步:借鉴旧 Yona autonomy 调度骨架(会诊冻结区,仅搬调度)。
    - 并发两层:turn 级(上面,互斥)+ 工具级(同轮多 tool-call 并行 = dsh executionMode,
-     **已实现**:同 step ≥2 个 tool-call 走 `ThreadPoolExecutor`(`core/loop.py:427-432`)—— 因此工具**必须线程安全**)。
-      > 【2026-09-21 23:30 更正】原文说工具级并行是"未来项,**当前串行执行够用**",但并行**已经实现**,而且它正是"工具必须线程安全"那条坑的来源 —— 真相:`core/loop.py:427-432`(`_run_tools`:1 次调用主线程、≥2 次 `ThreadPoolExecutor`);`core/tools.py:30-33`「同一个 step 里被模型一起叫到的工具是**并发**跑的…func 必须线程安全」。
+     **已实现**:同 step ≥2 个 tool-call 走 `ThreadPoolExecutor`(`core/loop.py` 的 `_run_tools`)—— 因此工具**必须线程安全**)。
+      > 【2026-09-21 23:30 更正】原文说工具级并行是"未来项,**当前串行执行够用**",但并行**已经实现**,而且它正是"工具必须线程安全"那条坑的来源 —— 真相:`core/loop.py` 的 `_run_tools`(1 次调用走主线程、≥2 次走 `ThreadPoolExecutor`);`core/tools.py` 的 `Tool` docstring(「同一个 step 里被模型一起叫到的工具是**并发**跑的…func 必须线程安全」)。
 8. **世界 section:系统本地能知道的,注入;不知道的,才配工具**:
    - 三类信息三分:静态死信息(生日/所在地,section 死值)、动态死信息(时间/日期/星期,
      每轮刷新注入的 section)、动作能力(换衣/搜索/发消息,才是工具)。
@@ -93,8 +94,8 @@
      时刻只来自世界 section(系统真实时间)+ 闸门在真实时刻触发场景,单时间源,不打架。
    - **绝对时间 vs 相对时间分工**:世界 section = 绝对时间(时钟,死信息);
      会话时间线 section(`make_timeline_section`)= 相对时间(距上次真人互动多久,
-     从日志 Event.time 派生,不是额外状态)——模型靠后者区分"刚聊完"vs"久别"。⚠️ 该段**只挂独处轮**(自走 / 补写):**陪聊轮不挂** —— 正在对话时它要么是"刚刚"要么是历史残留间隔,是噪音(`server/app/engine.py:866-887`)。
-      > 【2026-09-21 23:30 更正】原文读起来像"时间线每轮都注入",实际**只挂独处轮**;这是用户当场纠正过的决定,漏了会让下一个人把"陪聊轮也该有时间线"当成待补的缺口 —— 真相:`server/app/engine.py:866-887` 注释「陪聊轮 = 主人正在跟她说话:只给世界时刻(`[当前时间]`),**不挂 `[时间线]`**」;`timeline_section` 只进 `self_composer` / `backfill_composer` 的 `extra_sections`(`engine.py:877`、`:886`);正典 `docs/decisions/TIMELINE.md`「**[时间线] 只挂独处轮,不挂陪聊轮 ✅(2026-09 用户指出修正)**」。
+     从日志 Event.time 派生,不是额外状态)——模型靠后者区分"刚聊完"vs"久别"。⚠️ 该段**只挂独处轮**(自走 / 补写):**陪聊轮不挂** —— 正在对话时它要么是"刚刚"要么是历史残留间隔,是噪音(`server/app/engine.py` 里那句注释「陪聊轮 = 主人正在跟她说话:只给世界时刻(`[当前时间]`),**不挂 `[时间线]`**」)。
+      > 【2026-09-21 23:30 更正】原文读起来像"时间线每轮都注入",实际**只挂独处轮**;这是用户当场纠正过的决定,漏了会让下一个人把"陪聊轮也该有时间线"当成待补的缺口 —— 真相:`server/app/engine.py` 那句注释「陪聊轮 = 主人正在跟她说话:只给世界时刻(`[当前时间]`),**不挂 `[时间线]`**」;`timeline_section` 只进 `self_composer` / `backfill_composer` 的 `extra_sections`(`extra_sections=[timeline_section, wake_budget_section]` 那两处);正典 `docs/decisions/TIMELINE.md`「**[时间线] 只挂独处轮,不挂陪聊轮 ✅(2026-09 用户指出修正)**」。
    - 后续所有取舍沿袭此标准。
 9. **surface 层:一切"视图操作" = 追加注解事件,日志永不改**(UI 删除/撤回/编辑的落点):
    - 事实:UI 的删除/撤回/编辑**不是删数据**——没有数据库可删;UI 操作 = 向内核发请求,
@@ -128,8 +129,8 @@ Layer 1 · 内核(yona-rewrite/core)
   > 【2026-09-21 23:30 更正】P2 / P3 / P4 早已落地,原挂 ⏳ 会直接误导排期 —— 真相:`docs/decisions/TIMELINE.md`「P0-P4 · 内核与会话(09-02/03)」列了"事件日志 / 单循环 / 工具三件套 / 流式+chunk / SYSTEM 装配(builder)/ surface / 心跳(`source=self`)/ 会话存储 + thin router + 旧 UI 复用";代码侧 `core/composer.py`、`core/heartbeat.py`、`server/store.py` 均在。P1 状态未动(它是否等价于 `turn_lab.py` 无法确认)。
 
 Layer 2 · 旗舰(小夜子)
-  ✅ 工具集:搜网页 / 取页面(`server/app/worker_tools.py`,⚠️ **文件工具未接线** —— `SUBAGENT_FILE_ROOT=""`);**时间不是工具**(见决策 8);记忆已落地为 `recall` 工具(`character/tools.py:323`)
-  > 【2026-09-21 23:30 更正】原文「⏳ 工具集:搜索 / 时间 / 文件 / (记忆:RAG 待启动轨道)」与**同一份文件 :84**「**时间 = 动态死信息,不是工具**:get_time 退役」直接对立;而且记忆也已进产品、文件工具没接线 —— 真相:`test/test_character.py:104` 断言 `get_time` 工具不存在;记忆 = `core/memory.py` + `character/tools.py:323` + `server/app/engine.py:294`;工人文件工具 = `server/params.py:142-146`「空串 = **不接文件工具**(工人只有上网的手)…没拍之前只接 web_search / http_get」。
+  ✅ 工具集:搜网页 / 取页面(`server/app/worker_tools.py`,⚠️ **文件工具未接线** —— `SUBAGENT_FILE_ROOT=""`);**时间不是工具**(见决策 8);记忆已落地为 `recall` 工具(`character/tools.py` 的 `make_recall_tool()`)
+  > 【2026-09-21 23:30 更正】原文「⏳ 工具集:搜索 / 时间 / 文件 / (记忆:RAG 待启动轨道)」与**同一份文件 :84**「**时间 = 动态死信息,不是工具**:get_time 退役」直接对立;而且记忆也已进产品、文件工具没接线 —— 真相:`test/test_character.py` 的 `test_time_is_not_a_tool` 断言 `get_time` 工具不存在;记忆 = `core/memory.py` + `character/tools.py` 的 `make_recall_tool()` + `server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行;工人文件工具 = `server/params.py` 的 `SUBAGENT_FILE_ROOT`「空串 = **不接文件工具**(工人只有上网的手)…没拍之前只接 web_search / http_get」。
   ⏳ 生命行为:后台该做点什么(基于 P3)
   ✅ 最小 Web:`server/main.py`(薄壳路由,2026-09-21 实测 **309 行 / 32 端点**)+ `static/` 极简前端(**原"<200 行"指标已作废**,现状见 `docs/STRUCTURE.md`)
   > 【2026-09-21 23:30 更正】原文「FastAPI thin router(**<200 行**)」的指标早就不成立 —— 真相:`server/main.py` 共 **309 行**;端点 **32** 个(2026-09-21 实测)。

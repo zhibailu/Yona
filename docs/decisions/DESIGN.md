@@ -48,8 +48,8 @@
   - 当前未结束轮**不折叠**(step 间要拿工具结果当原料)。
 - `Tool.retain_result=True`:该工具痕迹跨轮保留(保真)。语义 = Anthropic Context Editing 的 `ExcludeTools`(名单式),我们是工具自述(布尔),更内聚。
 - 折叠与"本轮白名单"是两个维度:白名单管"本轮能给什么",折叠管"历史痕迹给不给看"。子集 + 折叠开 = 模型彻底不知道旧工具。
-- ~~**当前默认 False(忠实,业界主流),意图:旗舰(mvp/小夜子)开启折叠**~~ **内核默认 False(忠实,业界主流);旗舰已开 ✅(2026-09-19,`server/app/engine.py:924` 传 `fold_tool_traces=True`)**。内核保留双视图,默认不破坏主流语义。
-> 【2026-09-21 23:30 更正】原文读起来像旗舰还没生效 —— 真相:旗舰**已经真开着了**:`server/app/engine.py:924` 传 `fold_tool_traces=True`(注释写着「折叠视图开(**2026-09-19 用户拍板,原为 False**)」);`core/loop.py:53` 内核默认仍是 `False`;本文件 §7「折叠默认值」那条自己已写「旗舰默认 True」。
+- ~~**当前默认 False(忠实,业界主流),意图:旗舰(mvp/小夜子)开启折叠**~~ **内核默认 False(忠实,业界主流);旗舰已开 ✅(2026-09-19,`server/app/engine.py` 的 `_build_engine` 里 `fold_tool_traces=True` 那一行)**。内核保留双视图,默认不破坏主流语义。
+> 【2026-09-21 23:30 更正】原文读起来像旗舰还没生效 —— 真相:旗舰**已经真开着了**:`server/app/engine.py` 里 `fold_tool_traces=True` 那一行(注释写着「折叠视图开(**2026-09-19 用户拍板,原为 False**)」);`core/loop.py` 的 `AgentLoop.__init__` 签名 `fold_tool_traces: bool = False` 内核默认仍是 `False`;本文件 §7「折叠默认值」那条自己已写「旗舰默认 True」。
 - 参照:dsh compaction = 整段摘要替换 + 结果裁剪,不删配对(靠 tool-pairing 平衡切点);Anthropic = 服务端声明式自动管理。我们是客户端纯函数视图,更细、零成本、日志兜底。
 - **代价(已知)**:折叠后模型只能依赖"说出口的话 + 状态段",翻不了工具原文;需要旧数据就现调(retain_result 的工具例外)。
 
@@ -94,7 +94,14 @@
 | 5 | 某状态不该可操作? | 让它**结构上无法表示**,不糊弄 | message-feedback(半截消息无 messageId,无法被评分) |
 
 **两条元规则**:需求必须能重述成内核表达的操作,重述不了就砍 UI/拒绝,不许给内核开后门;
-UI 只消费内核的安全视图(`surface_states()` 等),不反向塑造存储。
+UI **不**反向塑造存储(这半句成立);但"UI 只消费内核的安全视图(`surface_states()` 等)"**不成立** ——
+实测 UI 走的是 `server/store.py` 的 `_messages_view()`,那里**自己重算**了一遍遮蔽与排序(它自己调
+`log.shadowed_seqs()` 再自己排 `anchored`),不受内核那套三态支配;
+`core/session_log.py` 的 `surface_states()` 目前**无产品消费者**(产品路径零调用,真在用的只有测试),
+2026-09 清理时已给它加了占位标注。
+> 【2026-09-21 23:45 更正】上面这半句原写的是"UI 只消费内核的安全视图(`surface_states()` 等),不反向塑造存储"
+> —— 前半句与代码不符,已按代码改成事实。占位标注的原文在 `core/session_log.py`:
+> 「⏸ **占位:docstring 说的"UI 转录本"这个消费方不存在 —— UI 自己重算了一遍**」。
 
 **fork vs compact 分层(重要,防混)**:
 - **fork 类**(UI 删除/撤回/编辑历史消息)= **tail-cut**:从选中的消息切到日志末尾,

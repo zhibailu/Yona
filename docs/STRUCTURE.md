@@ -43,9 +43,9 @@ yona-rewrite/
 ```
 
 > 【2026-09-21 23:20 更正】① `core/` 树原列 8 个行数里 7 个已过期,且现存 4 个模块完全没在树里 —— 真相(2026-09-21 实测行数):`core/loop.py`=461、`core/session_log.py`=445、`core/composer.py`=182、`core/heartbeat.py`=155、`core/openai_compat.py`=265、`core/assembler.py`=74、`core/tools.py`=90、`core/llm.py`=56;目录里另有 `core/embed.py`(175)、`core/memory.py`(300)、`core/memory_cache.py`(389)、`core/subrun.py`(335)。行数会漂,以代码为准。
-> 【2026-09-21 23:20 更正】② 原写 `main.py(~235)` 且"兼容再导出",与本文件 §3「已移除 facade(2026-09)」自相矛盾 —— 真相:`server/main.py` 实测 **309 行**;全文只有 `from .app import engine` / `from .app.engine import ROOT` / `from .params import ...`(main.py:32-35),没有任何符号再导出;正典 `docs/decisions/TIMELINE.md:63-64`「facade 移除 ✅(2026-09):main.py 不再再导出符号」。
+> 【2026-09-21 23:20 更正】② 原写 `main.py(~235)` 且"兼容再导出",与本文件 §3「已移除 facade(2026-09)」自相矛盾 —— 真相:`server/main.py` 实测 **309 行**;全文只有 `from .app.api import chat, config, media, view` / `from .app.engine import ROOT` / `from .params import ...` 那三行(`server/main.py` 的 import 段),没有任何符号再导出;正典 `docs/decisions/TIMELINE.md` 的「facade 移除 ✅(2026-09)」那条。
 > 【2026-09-21 23:20 更正】③ 原写 `test/`「12 文件」,与本文件 §3「9 测试」、§5「12 个测试文件」三个口径互相打架 —— 真相:`test/test_*.py` 实测 **23** 个(数字以实际跑 test/test_*.py 为准)。
-> 【2026-09-21 23:20 更正】④ 原写 data/「会话日志 + _life + images」—— `_life` 已不存在(与本文件 §5「不再有匿名全局 `_life.log`」矛盾),而且新的顶层 `cache/` 没进树 —— 真相:`data/` 实测 = `archive/ images/ presets/ sessions/ llm.local.json`;会话是目录制 `data/sessions/<sid>/{chat.log, meta.json, images/}`(`server/store.py:59-71`),`data/archive/`(`store.py:53`),`data/presets/`(`server/app/api/config.py:29-32`),`data/llm.local.json`(`server/app/llm_setup.py:24-28`)。记忆索引住**顶层 `cache/`**:`server/params.py:105-108` `MEMORY_CACHE_DIRNAME = "cache"`、`server/app/engine.py:75-79` `YONA_CACHE_DIR`,`.gitignore` 里有 `cache/`。
+> 【2026-09-21 23:20 更正】④ 原写 data/「会话日志 + _life + images」—— `_life` 已不存在(与本文件 §5「不再有匿名全局 `_life.log`」矛盾),而且新的顶层 `cache/` 没进树 —— 真相:`data/` 实测 = `archive/ images/ presets/ sessions/ llm.local.json`;会话是目录制 `data/sessions/<sid>/{chat.log, meta.json, images/}`(`server/store.py` 的 `_sid_dir()` / `_log_path()` / `_meta_path()` / `images_dir()`),`data/archive/`(`server/store.py` 的 `self.archive_dir = self.data_dir / "archive"` 那一行),`data/presets/`(`server/app/api/config.py` 的 `_presets_dir()`),`data/llm.local.json`(`server/app/llm_setup.py` 的 `config_path()` / `load_runtime()`)。记忆索引住**顶层 `cache/`**:`server/params.py` 的 `MEMORY_CACHE_DIRNAME = "cache"`、`server/app/engine.py` 的 `MEMORY_DIR`(读 `YONA_CACHE_DIR`),`.gitignore` 里有 `cache/`。
 > 【2026-09-21 23:20 更正】⑤ 原根文档清单指向的路径一半是错的,还含一个全仓不存在的 `MAP.md` —— 真相:`MAP.md` 全仓库不存在;根目录只有 `README.md` / `AI-GUARDRAILS.md` 两个 .md;`DESIGN.md`/`VISION.md` 在 `docs/decisions/`、`LIFE_BACKFILL.md` 在 `docs/protocols/`、`STRUCTURE.md` 在 `docs/`。树里另补 `turn_lab.py` / `prompt_lab/` 两行(拍板见 `docs/decisions/TIMELINE.md` 09-19「实验台改名 + 开 prompt_lab/ 目录」)。
 
 依赖方向(单向):`core` 不 import `server`/`character`;`character` 可 import
@@ -58,7 +58,7 @@ yona-rewrite/
 | 旧 Yona 功能 | 决策 | 状态 / 依据 |
 |---|---|---|
 | 内核 / 后台生命循环 | ✅ 已重做且更强 | 事件源 + 单循环 + surface + busy + 离线生活补写(K×shape 连续判定,见 LIFE_BACKFILL.md) |
-| **RAG 长期记忆** | ✅ 已迁成标准工具(2026-09-21) | `recall` 注册在 server/app/engine.py:294;底座 core/memory.py + core/memory_cache.py(sqlite 索引住顶层 cache/,语义路 = 可选 BGE,core/embed.py)。相似度阈值 / rerank 那条已实测证伪(见 decisions/TIMELINE.md 2026-09-19 §二) |
+| **RAG 长期记忆** | ✅ 已迁成标准工具(2026-09-21) | `recall` 注册在 `server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行;底座 core/memory.py + core/memory_cache.py(sqlite 索引住顶层 cache/,语义路 = 可选 BGE,core/embed.py)。相似度阈值 / rerank 那条已实测证伪(见 decisions/TIMELINE.md 2026-09-19 §二) |
 | 预设 presets | ✅ 已实现(2026-09) | config.py 的 CRUD + data/presets/*.json;应用预设 = 复制进会话快照(当轮 > 快照 > 默认三层) |
 | 多模型注册/切换 | ❌ 不做(UI 层的事,只影响 POST 参数) | rewrite 单模型 .env;UI 模型选择显示默认模型。协议轴 = 单 chat/completions 适配 + adapter 缝(将来),见 DESIGN §11 |
 | 评测 eval | 📝 留注释(不迁) | 旧 LLM-as-judge 思路可参考 `D:\MyProject\Yona\src\eval\*`,不贴胶水 |
@@ -66,7 +66,7 @@ yona-rewrite/
 | objects/actions | 📝 留注释 | workspace.objects 空占位;旧 `src/objects+actions` 冻结区 |
 | 管理端点(stats/rebuild-vector/export/clean-empty) | ✂️ 已剪 UI 入口 | 后端没有对应能力;按钮随 app-admin.js 移 `static/_unused/` |
 
-> 【2026-09-21 23:20 更正】上面两行是全仓最新拍板的反面 —— 真相:① `docs/decisions/TIMELINE.md:1201-1214`「`recall` 工具从 `test/recall_probe.py` 毕业进产品」,`server/app/engine.py:294` `_tools.register(make_recall_tool(recall_index))`,`core/memory.py` / `core/memory_cache.py` / `core/embed.py`(可选 BGE)均存在,故原「🔜 迁成标准工具 / rewrite 暂无向量记忆,记忆 = 日志回放」已过时;② `server/app/api/config.py:53-102` 四个端点(GET 列表 / GET 单个 / POST 保存 / DELETE),落盘 `data/presets/*.json`(`config.py:29-32`),`static/app-presets.js:12/29/67/93` 真在调,故原「⏸️ 延后 / `/presets` 返回 `[]`」已过时(且与本文件 §4 冲突)。
+> 【2026-09-21 23:20 更正】上面两行是全仓最新拍板的反面 —— 真相:① `docs/decisions/TIMELINE.md` 的「2026-09-21 · 记忆检索接进主链路 + **往事不常驻**」那节的 §二「已落地」(里面写着「`recall` 工具从 `test/recall_probe.py` 毕业进产品」),`server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行,`core/memory.py` / `core/memory_cache.py` / `core/embed.py`(可选 BGE)均存在,故原「🔜 迁成标准工具 / rewrite 暂无向量记忆,记忆 = 日志回放」已过时;② `server/app/api/config.py` 的四个预设端点(`@router.get("/presets")` / `@router.get("/presets/{name}")` / `@router.post("/presets")` / `@router.delete("/presets/{name}")`),落盘 `data/presets/*.json`(`_presets_dir()`),`static/app-presets.js:12/29/67/93` 真在调,故原「⏸️ 延后 / `/presets` 返回 `[]`」已过时(且与本文件 §4 冲突)。
 
 规则:不是"旧系统有的都要有",而是"旧系统 = 踩坑与思路参考;上不上线看它
 在**当前认知的闭环**里站不站得住"。
@@ -100,9 +100,9 @@ yona-rewrite/
   `命中概率 = SELF_WAKES_PER_DAY × shape(t) × Δt` —— 时刻倾向自动来自那张图,
   不再拍"深夜 5%/白天 30%"这类概率。
 - **三值已拍板(2026-09)**:每天期望自发醒 **3 次**、冷却 **90s**、心跳间隔
-  **60s**(params.py ✅;~~旧拍脑袋概率 0.05/0.30 + hot 分支已废弃~~;旧的硬编码概率 0.05 / 0.30 已废弃;**演示模式仍在**:`YONA_GATE_HOT=1` → `params.HOT_*`,接线见 `server/app/engine.py:981`)。
+  **60s**(params.py ✅;~~旧拍脑袋概率 0.05/0.30 + hot 分支已废弃~~;旧的硬编码概率 0.05 / 0.30 已废弃;**演示模式仍在**:`YONA_GATE_HOT=1` → `params.HOT_*`,接线见 `server/app/engine.py` 里 `hot = os.environ.get("YONA_GATE_HOT") == "1"` 那一行)。
 
-> 【2026-09-21 23:20 更正】原文"hot 分支已废弃"是错的(与 `docs/public/FAQ.md:19` 指令相反,FAQ 那条才是对的)—— 真相:`server/app/engine.py:981` 是 `hot = os.environ.get("YONA_GATE_HOT") == "1"`;`server/params.py:73-77` 有 `HOT_COOLDOWN_SEC = 20.0` / `HOT_INTERVAL_SEC = 20.0` / `HOT_WAKES_PER_DAY = 240.0`,并在 `_ROWS` 里作为 🔧 演示参数打印(`params.py:168-169`);废弃的只是**旧的硬编码概率**(深夜 0.05 / 白天 0.30)。
+> 【2026-09-21 23:20 更正】原文"hot 分支已废弃"是错的(与 `docs/public/FAQ.md` 里那条 `YONA_GATE_HOT` 指令相反,FAQ 那条才是对的)—— 真相:`server/app/engine.py` 里 `hot = os.environ.get("YONA_GATE_HOT") == "1"` 那一行;`server/params.py` 有 `HOT_COOLDOWN_SEC = 20.0` / `HOT_INTERVAL_SEC = 20.0` / `HOT_WAKES_PER_DAY = 240.0`,并在 `_ROWS` 里作为 🔧 演示参数打印(`_ROWS` 里那行 `("HOT_*(YONA_GATE_HOT=1)", …)`);废弃的只是**旧的硬编码概率**(深夜 0.05 / 白天 0.30)。
 - 探针 `test/gate_probe.py`:30 天蒙特卡洛命中/天 3.07 ≈ 期望 3.0、深夜恒 0、
   命中时刻分布跟随 shape(18-20 点最密)。
 
@@ -151,7 +151,7 @@ core/loop.py run_turn model 字段);「连接/更换模型」按钮 = 首启向�
   - **每轮可选字段(2026-09)**:temperature / max_tokens(覆盖到 LLM 调用,
     不给用实例默认)/ max_rounds(上下文窗口:保留最近 N 个**真人对白轮** + 当前轮 —— 独处轮不占名额(2026-09-21 拍板),整轮裁不切散工具配对)/ system_prompt(本轮人格覆盖串,替换 builder)
 
-> 【2026-09-21 23:20 更正】`max_rounds` 语义 2026-09-21 改过 —— 真相:`core/session_log.py:368-421`「⚠️ **独处轮(自走 / 补写)不占这个名额**(2026-09-21 用户拍板)…`ordered_ended = sorted(t for t in ended_turns if t not in self_turns)`」;`server/params.py:94-96` `DEFAULT_CONTEXT_ROUNDS = 20`。
+> 【2026-09-21 23:20 更正】`max_rounds` 语义 2026-09-21 改过 —— 真相:`core/session_log.py` 的 `derive_messages()` docstring「⚠️ **独处轮(自走 / 补写)不占这个名额**(2026-09-21 用户拍板)…`ordered_ended = sorted(t for t in ended_turns if t not in self_turns)`」;`server/params.py` 的 `DEFAULT_CONTEXT_ROUNDS = 20`。
 - 上下文:SystemComposer 段装配 + 变量插值 + builder 一/二/三参(registry, source, log)
 - **LLM 调用元信息(2026-09,上游一次捕获)**:openai_compat 归一化 usage
   (input=cache 命中剔除/cache_read/output/reasoning,见 `_parse_usage`)+

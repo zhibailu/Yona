@@ -148,7 +148,7 @@ subagent 代它去看 tool。当然主 loop 不是完全不留 tool 了。」
 **比值 ≈ 1 的活永远不该派** —— 付一整份额外 SYSTEM + 额外一步 + 序列化,
 换回的是同一坨字,还多绕一层。
 
-这条**能解释**已有实测(不是新实验,出处 `character/tools.py:113-121` 的三轮实验):
+这条**能解释**已有实测(不是新实验,出处 `character/tools.py` 的 `make_launch_subagent_tool()` 里那段「三轮真模型实验…共 126 次真调用」注释):
 "她做不了的活" 64/64 派(比值 ∞);"她做得完的长活" 6/52 —— **那正是比值接近 1 的一格**,
 所以换任何措辞都推不动。那不是文案失败,是那一格本来就不该有偏好。
 
@@ -225,20 +225,22 @@ loop 基础设施本身就能循环得很好;我们的 loop 现在很薄,一轮�
 source="user"       → 旗舰装配(persona + 情境 + 世界 + 状态 + 工具用法,**无 [时间线]**)
 source="self"       → 旗舰装配 + 自走情境段 + 时间预算(同一份 persona)
 source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单工具   ← 本协议新增
-                       ← **⏳ 未落地**(今天的实现是 `core/subrun.py:266` 的 `source="user"`
+                       ← **⏳ 未落地**(今天的实现是 `core/subrun.py` 的 `execute()` 里那句
+                         `loop.run_turn(spec.task, source="user", **overrides)` 的 `source="user"`
                          + 静态 `system_prompt=`,见 `test/test_subagent_wiring.py` 的现状测试)
 ```
 
 > 【2026-09-21 23:15 更正】`source="user"` 那一行当时写错了:陪聊轮早就不挂 `[时间线]`。
-> —— 真相:`server/app/engine.py:866-872` 注释明写「陪聊轮…**不挂 [时间线]**」,
+> —— 真相:`server/app/engine.py` 里那句注释「陪聊轮 = 主人正在跟她说话:只给世界时刻
+> (`[当前时间]`),**不挂 [时间线]**」,
 > `chat_composer` 没传 `extra_sections`;`[时间线]` 只挂在 `self_composer` /
-> `backfill_composer`(`engine.py:877`、`engine.py:886`);
-> `character/persona.py:120-129` 证明默认装配 = persona + situation + world + state + usage。
+> `backfill_composer`(那两处 `extra_sections=[timeline_section, wake_budget_section]`);
+> `character/persona.py` 的 `build_small_night_composer()` 证明默认装配 = persona + situation + world + state + usage。
 >
 > 【2026-09-21 23:15 标 · ⏳ 未落地】上面 `source="subagent"` 那一行写得像是**已经在装配里了**,
-> 其实**没有这个值** —— 真相:`core/subrun.py:266` 是
+> 其实**没有这个值** —— 真相:`core/subrun.py` 的 `execute()` 里是
 > `loop.run_turn(spec.task, source="user", **overrides)`;全仓库 `.py` grep 不到
-> `source="subagent"`;`test/test_subagent_wiring.py:234-246` 的测试名就叫
+> `source="subagent"`;`test/test_subagent_wiring.py` 的测试名就叫
 > `test_subrun_turn_is_indistinguishable_from_a_chat_turn`,断言
 > `starts[0]["data"]["source"] == "user"`。(该行立的"不许复用 `user`"规矩**照旧成立**。)
 
@@ -263,12 +265,16 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 | `server/store.py` | 会话列表 / life 流的过滤 |
 
 > 【2026-09-21 23:15 更正】上表 `core/loop.py` `_system_text` 那一行当时写错了:它**不是今天的落点**。
-> —— 真相:`core/subrun.py:249-255` 把任务级 SYSTEM 当**静态 `system_prompt=`** 传进 `AgentLoop`,
-> 不经 `_system_text`(函数定义在 `core/loop.py:237`,它只对 **callable** 才路由)。
+> —— 真相:`core/subrun.py` 的 `execute()` 里 `loop = AgentLoop(sub_log, llm, registry,
+> system_prompt=spec.system, ...)` 把任务级 SYSTEM 当**静态 `system_prompt=`** 传进 `AgentLoop`,
+> 不经 `_system_text`(函数定义在 `core/loop.py` 的 `_system_text`,它只对 **callable** 才路由)。
 >
 > 【2026-09-21 23:15 更正】上表 source 消费点清单当时不全,漏了 `source="self"` 现在最重的两个后果。
-> —— 真相:`core/session_log.py:473-479`(已结束独处轮的 assistant **整条不进投影**,直接 `continue`)、
-> `:412-421`(`ordered_ended = sorted(t for t in ended_turns if t not in self_turns)`);
+> —— 真相:`core/session_log.py` 的 `derive_messages()` 里那句
+> `if data.get("turn") in self_turns and data.get("turn") in ended_turns: continue`
+> (已结束独处轮的 assistant **整条不进投影**)、
+> 以及同函数的 `ordered_ended = sorted(t for t in ended_turns if t not in self_turns)`
+> (窗口只数真人对白轮,见该函数 docstring「独处轮(自走 / 补写)不占这个名额」);
 > 正典 `docs/decisions/TIMELINE.md`「2026-09-21 · 记忆检索接进主链路 + 往事不常驻」§一(用户拍板)。
 
 ### 4.2 该看到什么 / 不准看到什么
@@ -289,12 +295,13 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 推理模型的 `reasoning_tokens` **计入** `output_tokens`。
 
 > 【2026-09-21 23:15 更正】上面「4096 作用在**每一次调用**上」这句对**子运行**已经过时
-> —— 真相:`server/params.py:127-133` 已把子运行的单次预算**独立成一档**
-> `SUBAGENT_OUTPUT_MAX_TOKENS = 8192`(标 ⏳ 的只是**取值**),并已接线
-> `server/app/engine.py:177` `max_tokens=SUBAGENT_OUTPUT_MAX_TOKENS`;
-> 引擎注释 `engine.py:826-827` 写着「4096 是拍给聊天轮的…由 `_run_worker` 每轮覆盖」。
+> —— 真相:`server/params.py` 的 `SUBAGENT_OUTPUT_MAX_TOKENS` 已把子运行的单次预算**独立成一档**
+> (现值 8192,标 ⏳ 的只是**取值**),并已接线
+> `server/app/engine.py` 的 `_run_worker` 里 `max_tokens=SUBAGENT_OUTPUT_MAX_TOKENS`;
+> 引擎注释(`_build_engine` 里那句)写着「4096 是拍给聊天轮的…由 `_run_worker` 每轮覆盖」。
 > 而「**产品里没有任何累计预算**」这半句**仍然成立**(grep `累计预算` 只命中注释:
-> `core/subrun.py:35`、`test/lab/scheduler.py:20`)。
+> `core/subrun.py` 模块头那句「单次调用上限 vs 累计预算」、
+> `test/lab/scheduler.py` 模块头「没有重试、没有优先级、没有截止时间、没有累计预算」那句)。
 
 **实测**(2026-09-15,`deepseek-v4-flash` / `deepseek-v4-pro`,同一"整理长文本"任务):
 
@@ -308,7 +315,7 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 全是**思考预算**。
 
 **已定**:单次预算独立成一档 `server/params.py` 的 `SUBAGENT_OUTPUT_MAX_TOKENS`
-(现值 8192,已接线 `engine.py:177`)。
+(现值 8192,已接线 `server/app/engine.py` 的 `_run_worker` 里 `max_tokens=SUBAGENT_OUTPUT_MAX_TOKENS`)。
 **⏳ 待拍**:这个取值本身;以及累计预算(按活 / 按轮 / 按天)设不设、设多少
 (目前只有注释,无实现)。
 
@@ -352,7 +359,7 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 (今天 `engine._run_worker` 仍是阻塞语义,"她一次只做一件事"这条不变量暂时还在全量生效)
 
 > 【2026-09-21 23:15 标 · ⏳ 未落地】上面这条性质写成现在时,读起来像**已经发生** ——
-> 真相:`server/app/engine.py:149-156` 的 `_run_worker` docstring 写着「**阻塞**是 v1 的语义:
+> 真相:`server/app/engine.py` 的 `_run_worker` docstring 写着「**阻塞**是 v1 的语义:
 > 她这一轮会等它跑完」;异步投递 = 本文件 §7 任务栏的任务 5,未开工。
 
 ---
@@ -380,18 +387,20 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 | # | 任务 | 状态 | 登记日期 | 最近变更 | 依赖 |
 |---|---|---|---|---|---|
 | 1 | `source="subagent"` + 装配路由(隔离的执行点) | 未开工 | 2026-09-15 | — | — |
-| 2 | 新实例而非共享实例(turn 锁不可重入) | 完成 | 2026-09-15 | 2026-09-16 已落(`core/subrun.py:249`) | — |
-| 3 | 单次预算 ✅ 已落(8192,`params.py:133` + `engine.py:177`);累计预算 未开工 | 进行中 | 2026-09-15 | — | 待拍取值 |
+| 2 | 新实例而非共享实例(turn 锁不可重入) | 完成 | 2026-09-15 | 2026-09-16 已落(`core/subrun.py` 的 `execute()` 里 `loop = AgentLoop(...)`) | — |
+| 3 | 单次预算 ✅ 已落(8192,`params.py` 的 `SUBAGENT_OUTPUT_MAX_TOKENS` + `engine.py` 的 `_run_worker` 里 `max_tokens=`) | 进行中 | 2026-09-15 | — | 待拍取值 |
 | 4 | 队列:并发上限(批量并发是正经用法) | 未开工 | 2026-09-15 | — | — |
 | 5 | 异步:投递策略 + **消息级来源**(≠ `turn/start.source`) | 未开工 | 2026-09-15 | — | 4 |
 | 6 | 失败契约(空结论怎么表达,别静默空回) | 未开工 | 2026-09-15 | — | — |
 
 > 【2026-09-21 23:15 更正】#2 / #3 的状态当时写错了(与 §9 和代码三方打架:#2 已经落了快一周
-> 还在写"未开工") —— 真相:#2 `core/subrun.py:249-255` 每次 `execute()` 都新建 `AgentLoop`
-> (该文件第 15-19 行注释明说这是硬约束),本文件 §9 自己写着「执行器(**已毕业进内核**)」,
+> 还在写"未开工") —— 真相:#2 `core/subrun.py` 的 `execute()` 每次都新建 `AgentLoop`
+> (`loop = AgentLoop(sub_log, llm, registry, ...)`)
+> (该文件模块头注释明说这是硬约束),本文件 §9 自己写着「执行器(**已毕业进内核**)」,
 > 测试 `test/test_subagent_wiring.py::test_same_instance_inside_a_tool_deadlocks`
-> 在跑;#3 单次预算已落(`server/params.py:133` + `server/app/engine.py:177`;
-> `engine.py:172` 用 `SUBAGENT_MAX_STEPS` 填 `[步数预算]` 段),只有累计预算没做。
+> 在跑;#3 单次预算已落(`server/params.py` 的 `SUBAGENT_OUTPUT_MAX_TOKENS` +
+> `server/app/engine.py` 的 `_run_worker` 里 `max_tokens=`;
+> `_run_worker` 里还用 `personas_mod.SUBAGENT_BUDGET_TEMPLATE.format(steps=SUBAGENT_MAX_STEPS)` 填 `[步数预算]` 段),只有累计预算没做。
 
 **已砍**(2026-09-15):深度守卫 —— 不做递归就不需要守。
 

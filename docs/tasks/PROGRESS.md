@@ -58,8 +58,9 @@
   补齐);四件套 {人格覆盖/温度/轮数/model};快照存 `sessions/<sid>/meta.json`
   的 settings 键(`PATCH /sessions/{sid}/settings`,{} = 清空);
   > 【2026-09-21 22:50 更正】这里原写「`{sid}.meta.json`」—— 那是**任务 7 之前的
-  > 平铺布局**;任务 7 已改成**会话=目录制**(见本节末尾),`server/store.py:67`
-  > 现在是 `sessions/<sid>/meta.json`,平铺写法只在 `store.py:91-97` 的**一次性
+  > 平铺布局**;任务 7 已改成**会话=目录制**(见本节末尾),`server/store.py` 的
+  > `_meta_path()` 现在是 `sessions/<sid>/meta.json`,平铺写法只在
+  > `_migrate_legacy_layout()` 的**一次性
   > 迁移代码**里出现。UI 自动+防抖
   保存、切会话回填、恢复默认 = 清快照;预设 = 命名快照(应用 = 复制进快照)。
   DESIGN §12 权威,测试 test_snapshot.py。
@@ -87,7 +88,7 @@
   注入侧拆干净(`core/session_log.py` 已无 `life_event_prefix` 参数);
   **读侧清洗保留**(`strip_copied_prefix` / `view.py` / `rows_from_events`)——
   日志里那 2 条脏字是唯一证据,日志一字不动。
-- **窗口 = 对话窗口**:`sliding_window`(默认 20,`params.py:96`)**只数真人对白轮**,
+- **窗口 = 对话窗口**:`sliding_window`(默认 20,`server/params.py` 的 `DEFAULT_CONTEXT_ROUNDS`)**只数真人对白轮**,
   独处轮不占名额(`core/session_log.py` 的 `allowed_turns`)。实测该卡
   (19 自走 + 4 对话):20/10/5 三档窗口下 4 段真人对白**都完整可见**(改前是 3/2/2)。
 - **索引住顶层 `cache/`**(从 `chat.log` 派生的可重建产物,不是数据;已进

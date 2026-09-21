@@ -5,7 +5,7 @@
 > 状态:**探针实验记录(不是拍板,不是待办清单)。**
 > 零件本体已于 **2026-09-21 毕业进产品**:`character/tools.py` 的 `make_recall_tool`
 > + 底座 `core/memory.py` / `core/memory_cache.py` / `core/embed.py`,
-> 注册在 `server/app/engine.py:294`。
+> 注册在 `server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行。
 > 本文其余部分是**当时**的实验与判据史料;凡与 `TIMELINE.md` 或代码冲突,
 > **一律以 TIMELINE + 代码为准**(2026-09-21 22:55 标)。
 > 唯一例外见 §2 零件④ 末尾的 ⚠️(那条是"文档与代码谁对"待用户裁决)。
@@ -60,7 +60,7 @@
 
 **MVP 的全部接口只有两个**:她填 `query` + `scope`;后端还她一段中文。
 **`limit` 不在接口里** —— 它由产品侧给(**当前是常数 2,下限 1**;
-要"按上下文预算算"就接 `limit_fn` 钩子,`character/tools.py:327` —— 目前装配处没接)。
+要"按上下文预算算"就接 `limit_fn` 钩子(`character/tools.py` 的 `make_recall_tool()` 形参)—— 目前装配处没接)。
 
 ---
 
@@ -71,8 +71,8 @@
 ### §2.0 通道规则(先读这个,不然后面四段都看不懂)
 
 ```
-character/personas.py:97   VALUES = {"owner": "主人"}          ← 称呼是变量
-core/composer.py:120       lines = [f"- {name}: {usage}"]      ← 工具 usage 通道
+character/personas.py 的 VALUES             VALUES = {"owner": "主人"}          ← 称呼是变量
+core/composer.py 的 make_usage_section()    lines = [f"- {name}: {usage}"]      ← 工具 usage 通道
 ```
 
 | 通道 | 走 `interpolate` 吗 | 写 `{owner}` | 裸写「主人」 |
@@ -150,8 +150,8 @@ usage:       query 用一句话说清找什么,越具体越好。
 > 从 desc 拿掉 → 天气那格 **24/25 掉到 19/25**;两处都不说 → **21/25**。
 > **能删的只有重复,不是内容。**
 
-> ⚠️ **不要再加 `recall:` 前缀。** `core/composer.py:120` 已经是
-> `f"- {name}: {usage}"`,加了会渲染成 `- recall: recall:想不起来的时候用…`。
+> ⚠️ **不要再加 `recall:` 前缀。** `core/composer.py` 的 `make_usage_section()` 里
+> `lines = [f"- {name}: {usage}" ...]` 那一行就是,加了会渲染成 `- recall: recall:想不起来的时候用…`。
 > (2026-09-19 端到端视图里抓到过这个。)
 
 > ⚠️ **想再砍之前先读 [TRAPS.md](TRAPS.md) §一.10 / §一.11。**
@@ -159,7 +159,7 @@ usage:       query 用一句话说清找什么,越具体越好。
 
 **为什么是「想不起来的时候用」而不是「凡是过去的事都用」**:
 实测给"凡是…都用"这类硬规矩,会拿闲聊换覆盖率。参照系是
-`character/tools.py:119` 记录的三轮实验:**触发条件是「她没别的办法」,不是「活很长」**。
+`character/tools.py` 的 `make_launch_subagent_tool()` 里那段三轮实验注释:**触发条件是「她没别的办法」,不是「活很长」**。
 
 ---
 
@@ -224,14 +224,19 @@ reranker 的负侧很干净(0.000~0.006),但正侧同样横跳,所以也没用�
 
 > ⚠️ **【2026-09-21 22:55 标】上面这些是实验里的做法,产品里只落了一半。**
 > 产品实际:`_GREY_TOP = 0.45` **在用**;`_FLOOR = 0.25` **没接线** ——
-> `make_recall_tool` 的 `min_score` 默认 `None`(`character/tools.py:328` 注释:
-> 「None = 不设(产品默认不设,见 `_FLOOR`)」),`:399-400` 只在传了值时才过滤,
-> 而 `server/app/engine.py:294` **只传了 `recall_index`**。
-> `test/test_recall_tool.py:171-179` 甚至断言"不设阈值就该给出来"。
+> `make_recall_tool` 的 `min_score` 默认 `None`(`character/tools.py` 的 `make_recall_tool()` 里
+> `min_score` 形参那句注释:
+> 「None = 不设(产品默认不设,见 `_FLOOR`)」),`if min_score is not None:` 那段只在传了值时才过滤,
+> 而 `server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行**只传了 `recall_index`**。
+> `test/test_recall_tool.py` 的 `test_min_score_can_turn_a_weak_hit_into_empty` 甚至断言"不设阈值就该给出来"。
 > 所以**产品现状是:低分命中照样返回 `ok`,没有地板挡**。
-> 同理 `MemoryIndex.top_cos`(`core/memory.py:333`)是为闸门写的,产品路径**零调用者**。
-> **这属"文档 vs 代码"的分歧,不是"谁更晚"—— 代码为真,已按代码改文档;
-> 需要用户拍的只是"要哪个行为"(补接线 / 就保持不设),不自行二选一。**
+> 同理 `MemoryIndex.top_cos`(`core/memory.py` 的 `MemoryIndex.top_cos()`)是为闸门写的,产品路径**零调用者**。
+> **这属"文档 vs 代码"的分歧,不是"谁更晚"—— 代码为真,已按代码改文档。**
+> 【2026-09-21 24:00 ✅ 已裁决:**保持原样(不接线)**】用户口径「有正提升就做,
+> 没有就保持原样」→ 跑 `test/recall_bench.py --corpus both` 取证,**没有正提升、
+> 有负提升**:big 语料(315 条)上「负例最高余弦 0.439」> 「可答最低余弦 0.206」,
+> **重叠** —— 地板 0.25 会把一条真答案(`B-412`)当成"确实没有"挡掉。
+> 依据写进 `character/tools.py` 的 `_FLOOR` 注释;`min_score` 保持产品不传。
 
 **证据**:`recall_probe.py` 路由测试 `R16~R19`(四态:ok / empty / degraded / down)**PASS**。
 (R20 / R21 那两条是**往事段**用例 —— 零件已取消,只作史料,别算进四态证据。)【2026-09-21 22:55 标】
@@ -316,7 +321,7 @@ reranker 的负侧很干净(0.000~0.006),但正侧同样横跳,所以也没用�
 
 > ⚠️ **工具集摆全**时这一格**本来要靠** `launch_subagent` 那句「缺关键条件先问」兜
 > (天气格 20% → 90%)—— 两条规矩各管一段,不是二选一。
-> **但那段文案至今没进产品**:`character/tools.py:36-58` 的 `_launch_usage()` 全文
+> **但那段文案至今没进产品**:`character/tools.py` 的 `_launch_usage()` 全文
 > 没有这句,`character/personas.py` 的 `PERSONA` 也没有那条动作纪律
 > (全库 grep「缺关键条件」只命中 docs 与 `test/recall_stage1_lab.py` 的实验臂)。
 > **所以产品现状是:没有兜底。** 见 `TIMELINE.md` 09-19 §五。【2026-09-21 22:55 标】
@@ -359,7 +364,7 @@ reranker 的负侧很干净(0.000~0.006),但正侧同样横跳,所以也没用�
 准但不可推广。→ 要真解决保真,得先造一个能测加戏的判据。
 
 **这一轮还顺手撞到一个接线 bug(不是设计,已修)**:
-`core/loop.py:428` 在同一个 step 有 **≥2 个工具调用**时走线程池,而 sqlite 连接
+`core/loop.py` 的 `_run_tools` 在同一个 step 有 **≥2 个工具调用**时走线程池,而 sqlite 连接
 默认 `check_same_thread=True` → **两次调用同时崩**,工具报 `down`,她说"我翻不到"。
 症状长得像"她记性不好"。首跑 23 次调用里 **14 次是 `down`**。
 **这是给产品实现的硬约束**:真的 recall 后端必须线程安全。
@@ -372,7 +377,7 @@ reranker 的负侧很干净(0.000~0.006),但正侧同样横跳,所以也没用�
 > 末尾的自查写着"`git diff -- core character server` 应为空" —— **都已不成立**
 > (零件已毕业进产品)。那两句已删。
 > 产品侧落点:**`character/tools.py`**(工具)+ `core/memory.py` /
-> `core/memory_cache.py` / `core/embed.py`(底座)+ `server/app/engine.py:294`(注册)。
+> `core/memory_cache.py` / `core/embed.py`(底座)+ `server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行(注册)。
 > 见 `TIMELINE.md` 09-21「记忆检索接进主链路」。
 
 ```bash

@@ -14,14 +14,20 @@
 - **没有多层继承。只有两层。** 深度只可能来自"嵌套的执行体",而递归子代理**已砍**。
 - **两条正交的轴**:能力轴(工具在这里,相交/只减)与角色轴(人设在这里,覆盖/就近赢)。
   **两轴不相交 = "工具与角色解绑"的确切含义。**
-- **L2 的判定键不是 `source` 本身** —— 自走轮和补写轮共用 `source="self"`,靠 `log.time_cursor is not None` **且** `engine._backfill_clock["ts"]` 非 0 区分(两个一起判,是为了区分"真回放"和"实验台拨时间",见 `server/app/engine.py:903`)。
+- **L2 的判定键不是 `source` 本身** —— 自走轮和补写轮共用 `source="self"`,靠 `log.time_cursor is not None` **且** `engine._backfill_clock["ts"]` 非 0 区分(两个一起判,是为了区分"真回放"和"实验台拨时间",见 `server/app/engine.py` 的 `_is_backfill(log)`)。
 - **"加"与"减"是两条通道**:减 = allow/deny 相交;加 = 在自己这一层注册。
 
 > 【2026-09-21 23:15 更正】上面那条判定键当时只写了 `time_cursor` 一半。
-> —— 真相:`server/app/engine.py:903` 是
-> `if log is not None and log.time_cursor is not None and _backfill_clock["ts"]: return backfill_composer.compose(...)`;
-> 同一判定在 `engine.py:955-957`(视图)与 `engine.py:841`(`_live_epoch`)重复;
+> —— 真相:判定的唯一实现是 `server/app/engine.py` 的 `_is_backfill(log)`
+> (`return log is not None and log.time_cursor is not None and bool(_backfill_clock["ts"])`);
+> 选 composer 的是 `sys_by_source`(`if _is_backfill(log): return backfill_composer.compose(values)`);
 > 本文件 §3 表格同一行原来也只写了 `log.time_cursor is not None`。
+> 【2026-09-21 23:45 更正】上一条把落点写成"同一判定在 `engine.py:955-957`(视图)与
+> `engine.py:841`(`_live_epoch`)重复"—— 那次清理已把判定**收口成一处**,且 `_live_epoch`
+> 这个闭包**已删**:唯一实现 = `engine._is_backfill(log)`(**两个条件:游标非 None 且补写钟非 0**),
+> 配套 `_epoch_now(log)`(算"现在")与 `_values(...)`(值包)。
+> ⚠️ `_values` 有一处**有意不同**(不是漂移):观测口 `system_component_sections` 固定传
+> 全局 `_tools`,**不按本轮 registry**;`sys_by_source` 才传本轮真正开放的那份。
 
 ---
 
@@ -82,9 +88,12 @@ L2  轮次种类        一个键，查出「身份 + 模式 + 工具可见性�
 | 工人(**已落地**) | `"user"` ⚠️ **未正名**(见 `SUBAGENT.md` §4.1) | — | 工人 | 只读白名单(`engine._worker_tools`:web_search / http_get) |
 
 > 【2026-09-21 23:15 更正】「工人(计划中)/`source="subagent"`」当时写错了(与本文 §4 的更正
-> 和代码都打架) —— 真相:`server/app/engine.py:192-193` 已把 `make_launch_subagent_tool`
-> 注册进产品 `_tools`;`engine.py:122-125` `_worker_tools` 只接 `web_search` / `http_get`;
-> `core/subrun.py:266` 记的 `source` 是 `"user"`(`test/test_subagent_wiring.py:234-246` 钉住);
+> 和代码都打架) —— 真相:`server/app/engine.py` 的 `_tools.register(make_launch_subagent_tool(...))`
+> 已把它注册进产品 `_tools`;`engine.py` 的 `_worker_tools`(由 `_WORKER_WEB_TOOLS` 过滤
+> `make_read_only_tools`)只接 `web_search` / `http_get`;
+> `core/subrun.py` 的 `execute()` 里那句 `loop.run_turn(spec.task, source="user", ...)`
+> 记的 `source` 是 `"user"`(`test/test_subagent_wiring.py` 的
+> `test_subrun_turn_is_indistinguishable_from_a_chat_turn` 钉住);
 > 全仓库无 `source="subagent"`。
 
 **两个要点:**
@@ -92,13 +101,18 @@ L2  轮次种类        一个键，查出「身份 + 模式 + 工具可见性�
 1. **补写轮和自走轮共用 `source="self"`。** 靠 `source` 一个键**分不开它们**。
    补写轮的工具差异目前是**在调用点硬传**的(`engine._maybe_backfill_life`
    里传 `tools=empty_tools`),
-   装配差异靠 `log.time_cursor is not None` **且** `engine._backfill_clock["ts"]` 非 0 判定 → 选 `_composers["backfill"]`(两个一起判,是为了区分"真回放"和"实验台拨时间",见 `server/app/engine.py:903`)。
+   装配差异靠 `log.time_cursor is not None` **且** `engine._backfill_clock["ts"]` 非 0 判定 → 选 `_composers["backfill"]`(两个一起判,是为了区分"真回放"和"实验台拨时间",见 `server/app/engine.py` 的 `_is_backfill(log)`)。
    → 所以 L2 的键应当是一个**派生出来的"轮次种类"**,`source` 是它的主要输入,但不是全部。
 
    > 【2026-09-21 23:15 更正】上面这条判定键当时只写了 `time_cursor` 一半。
-   > —— 真相:同一个判定在 `server/app/engine.py:903`、`engine.py:955-957`(视图)
-   > 与 `engine.py:841`(`_live_epoch`)三处都要求 `_backfill_clock["ts"]` 非 0;
+   > —— 真相:判定要求 `log.time_cursor is not None` **且** `_backfill_clock["ts"]` 非 0;
    > 本文件 §3 表格"还靠什么区分"那一格已同步补全。
+   > 【2026-09-21 23:45 更正】上一条写的"三处都要求"( `server/app/engine.py:903` /
+   > `engine.py:955-957`(视图) / `engine.py:841`(`_live_epoch`) )已作废 —— 那次清理把判定
+   > **收口成一处**:唯一实现 = `server/app/engine.py` 的 `_is_backfill(log)`
+   > (两个条件:游标非 None **且** 补写钟非 0),`_live_epoch` 闭包已删,配套
+   > `_epoch_now(log)` / `_values(...)`。⚠️ `_values` 有一处**有意不同**:观测口
+   > `system_component_sections` 固定传全局 `_tools`,不按本轮 registry。
 2. **现状是"调用点显式传 `tools=`"**,不是"照表路由"。本协议要做的就是把这条现状
    收成**一张表**,让"谁看得见什么"有一个单一落点。
 

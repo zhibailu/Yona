@@ -36,7 +36,7 @@ All have documented decisions, but **no old-glue porting** and they do not compe
 - **Voice & senses**: ASR / TTS / vision.
 - **Eval**: an automated system for measuring "companionship quality."
 
-> 【2026-09-21 23:25 更正】本节两处都错位:"vector recall"(长期记忆)已上线,不该还在 backlog;"→ rerank"恰恰是被实测证伪、明确不采用的方案。 —— 真相:已上线部分 = `server/app/engine.py:294` + `core/memory.py` + `core/memory_cache.py` + `core/embed.py`;rerank 被证伪 = `docs/decisions/TIMELINE.md` 的「2026-09-19 · 往事段 + recall 工具」§二「⚠️ 阈值那条路**已被实测证伪**」;对应常量 `character/tools.py:267` `_FLOOR = 0.25`、`:260-263` 四态。
+> 【2026-09-21 23:25 更正】本节两处都错位:"vector recall"(长期记忆)已上线,不该还在 backlog;"→ rerank"恰恰是被实测证伪、明确不采用的方案。 —— 真相:已上线部分 = `server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行 + `core/memory.py` + `core/memory_cache.py` + `core/embed.py`;rerank 被证伪 = `docs/decisions/TIMELINE.md` 的「2026-09-19 · 往事段 + recall 工具」§二「⚠️ 阈值那条路**已被实测证伪**」;对应常量 `character/tools.py` 的 `_FLOOR = 0.25`、四态 `R_OK` / `R_EMPTY` / `R_DEGRADED` / `R_DOWN`。
 
 > For each item's tradeoff and "why not now," see the dev-layer `docs/decisions/` and `docs/STRUCTURE.md` (maintainer docs).
 

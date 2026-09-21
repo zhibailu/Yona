@@ -14,7 +14,8 @@
 > 带 ⚠️/❌ 的标注就是"这里被推翻了",照着它往下找新结论。
 >
 > 【2026-09-21 23:45 改】这张表原来写的是**行号**,而行号每次在这份文件里插一段就会漂
-> (本轮就漂过一次:我加的目录把后面所有行推后了 50 行,表里的 L559/L1244 全成了假引用)。
+> (本轮就漂过一次:我加的目录把后面所有行推后了 50 行,表里那两个行号全成了假引用)。
+> 【2026-09-22 注】上面那句里的具体行号已删掉 —— 留着它们本身就是同一类错。
 > **现在只列小节名,不写行号也不写锚点**(中文标题的锚点各渲染器算法不一,宁可不给,
 > 也不给一个点了没反应的链接)。**用编辑器的查找定位小节名即可。**
 
@@ -84,8 +85,13 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
 - **UI 处置**:旧 static 复用,只剪 404 死按钮(`_unused/`);快照逻辑留空;
   保留 session 切换 —— **每会话独立 log**(`data/sessions/{id}.log` +
   `{id}.meta.json`,已实现);人设文案只在代码一处。
-- **thin router 布局 B(用户拍板)**:`server/main.py` 只留路由薄壳(24 端点,
-  2026-09 实测数,文档曾误写 25 已改);业务分层:
+- **thin router 布局 B(用户拍板)**:`server/main.py` 只留路由薄壳(端点 24 个,
+  2026-09 当时的实测数;~~文档曾误写 25 已改~~)。
+  ⚠️ 【2026-09-22 更正】**这个数早就不对了** —— 2026-09-21 实测 **32 个**端点
+  (`main.py` 13 + `api/config.py` 7 + `api/media.py` 5 + `api/view.py` 6 + `api/chat.py` 1),
+  之后加的 LLM 配置向导与记忆相关端点都不在 24 里。
+  **端点数 / 行数一律以代码为准**,别照这里的历史数用(现状见 `docs/STRUCTURE.md`)。
+  业务分层:
   `server/app/{engine,gate}` + `server/app/api/{chat,view,media}` +
   `server/{store,rhythm}`(支撑库留包根)。
 - **facade 移除 ✅(2026-09)**:main.py 不再再导出符号;测试/探针直达
@@ -184,11 +190,12 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
 - **gate 方案② ✅(2026-09 方向拍板)**:与补写同一原语(概率 = 每天期望 ×
   shape × Δt)。~~**三个数值 ⏳ 待拍(cooldown / interval / wakes_per_day)**~~
   > 【2026-09-21 22:30 更正】**三个数值早已 ✅ 拍板,这句是错的。**
-  > 权威在 `server/params.py:55-61`,与 `docs/tasks/OPEN.md` 一致:
+  > 权威在 `server/params.py` 的 `SELF_WAKES_PER_DAY` / `HEARTBEAT_COOLDOWN_SEC` /
+  > `HEARTBEAT_INTERVAL_SEC`,与 `docs/tasks/OPEN.md` 一致:
   > `SELF_WAKES_PER_DAY = 3.0` / `HEARTBEAT_COOLDOWN_SEC = 90.0` /
   > `HEARTBEAT_INTERVAL_SEC = 60.0`,三行都标着「✅ 2026-09 拍板」。
-  > 仍然 ⏳ 的是**心跳调度的上下限**(`HEARTBEAT_MIN/MAX_INTERVAL`,`params.py:165`
-  > 标"⏳ 调度约束(沿用)")—— 别把这两件事混起来。
+  > 仍然 ⏳ 的是**心跳调度的上下限**(`HEARTBEAT_MIN_INTERVAL` / `HEARTBEAT_MAX_INTERVAL`,
+  > `server/params.py` 的 `_ROWS` 里标"⏳ 调度约束(沿用)")—— 别把这两件事混起来。
 - 人设笔误史:曾把 BACKFILL 写成"16 岁女孩"(与 21 岁冲突),已修回 ——
   教训:搬移必须逐字,见 §五 规则 5。**2026-09-06 再记一笔**:身份句曾
   三处复制且陪聊版("AI 伴侣")与自走/补写版("21 岁女大学生")互相矛盾 ——
@@ -333,7 +340,7 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
    **但 β(真人消息带时间戳,✅ 已落地)已经提供了另一组输入**:每条**真人消息**
    在历史里自带 `[09-17 23:24]`,配 `[当前时间]` 一减就得出间隔 ——
    同节 `:235` 自己写着「**标真人就等于把她的也夹住了**」。
-   所以**陪聊轮不需要 `[时间线]` 长回来**(`engine.py:869` 现在不挂它,是对的)。
+   所以**陪聊轮不需要 `[时间线]` 长回来**(`server/app/engine.py` 的 `chat_composer` 那处 —— 注释「陪聊轮 = 主人正在跟她说话…**不挂 [时间线]**」,是对的)。
    `[时间线]` 仍有活的只有**独处轮**:β 的标签只跟窗口内的消息(`:236-238`),
    而实测那张卡 22 轮里 19 轮是自走 —— 窗口一满,最后一条真人消息被挤出去,
    标签也就没了。这正是它只挂 `self_composer` / `backfill_composer` 的理由。
@@ -373,7 +380,7 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
 #### 一、已拍
 
 - **往事不再以 `assistant` 身份常驻对话历史**,折成 SYSTEM 一段(挂载点
-  `character/persona.py:117` 的 `extra_sections`,VISION 预留下的接回点)。
+  `character/persona.py` 的 `build_small_night_composer()` 的 `extra_sections` 形参,VISION 预留下的接回点)。
   实测该卡 `last_turns=12` 窗口:**messages 14 条 → 4 条**,被日记挤掉的对话回来了。
   段优先级建议 **18**(时间簇 15/16/17 之后、状态 20 之前)。
 - **检索做成工具,不做常驻注入**(旧 Yona 的 `life_memory` 注入器因
@@ -410,19 +417,34 @@ reranker(`bge-reranker-base`)也测了:负侧压到 **0.000~0.006** 很干净,
 > 【2026-09-21 22:45 更正 · ⚠️ **上面这句有一半与代码不符,报用户裁决**】
 > **灰区那半是真的**(`character/tools.py` 的 `_GREY_TOP = 0.45` 确实在用);
 > **地板那半没有生效** —— `make_recall_tool(..., min_score=None)` 是默认,
-> `character/tools.py:328` 的注释就写着「None = 不设(产品默认不设,见 `_FLOOR`)」,
-> `:399-400` 只在**传了值**时才过滤,而装配处 `server/app/engine.py:294`
+> `character/tools.py` 的 `make_recall_tool()` 里 `min_score` 形参那句注释就写着「None = 不设(产品默认不设,见 `_FLOOR`)」,
+> `if min_score is not None:` 那段只在**传了值**时才过滤,而装配处 `server/app/engine.py`
+> 里 `_tools.register(make_recall_tool(recall_index))` 那一行
 > **只传了 `recall_index`,没传 `min_score`**。
-> `test/test_recall_tool.py:171-179` 甚至断言"不设阈值就该给出来"。
+> `test/test_recall_tool.py` 的 `test_min_score_can_turn_a_weak_hit_into_empty` 甚至断言"不设阈值就该给出来"。
 > 所以产品现状是:**低分命中照样返回 `ok`,没有地板挡着**。
 >
 > 这不是"两条文档谁新谁旧"的分歧 —— **这是「文档 vs 代码」**,代码就是事实,
 > 不存在"以更晚的为准"这一说。**文档写错了,按代码改文档。**
-> 需要用户拍的**只是"要哪个行为"**:(甲) **补上接线**(`engine.py` 传
-> `min_score=_FLOOR`,让文档成真);(乙) **就保持不设**(地板只当"留着可用的口子",
-> 文档照代码改)。**等用户拍。**
-> 同理:`MemoryIndex.top_cos`(`core/memory.py:333`)是为闸门写的,**产品路径零调用者**
+> 同理:`MemoryIndex.top_cos`(`core/memory.py` 的 `MemoryIndex.top_cos()`)是为闸门写的,**产品路径零调用者**
 > (只有测试在用)—— 也是同一件事的另一半。
+
+> 【2026-09-21 24:00 ✅ **已裁决:保持原样(不接线),而且这是对的**】
+> 用户口径:「**如果之前做过测试包含它,而且确实有正提升的话就去做吧,没有就保持原样。**」
+> → **跑 `test/recall_bench.py --corpus both` 取证,结论是没有正提升、有负提升:**
+>
+> | 语料 | 负例最高余弦 | 可答最低余弦 | 余量 |
+> |---|---|---|---|
+> | hard(48 条) | 0.338 | 0.481 / 0.499 | +0.142 / +0.161 ✅ 分开 |
+> | **big(315 条)** | **0.439** | 自然问法 **0.395** | **−0.044 ❌ 重叠** |
+> | | | 词面型 **0.206** | **−0.232 ❌ 重叠** |
+>
+> **小语料分得开,大语料重叠。** 一条真答案(语料里的「B-412」)最高余弦只有 **0.206**,
+> 地板 0.25 会把**真答案当成"确实没有"挡掉** —— 正是四态设计要避免的
+> "真答案被说成想不起来";而负例那头 0.439 它也挡不住。
+> → **不接线。** 依据写进 `character/tools.py` 的 `_FLOOR` 注释(含这张表),
+> 并标成 `⏸ 占位,未接线 —— 别照旧注释理解成"已挡着"`。
+> **将来要动:先在 bench 上跑出正余量再说,再决定取值;启用只需传 `min_score=`,一行的事。**
 
 > 【2026-09-21 23:55 自纠】我先前把这条写成「最新那条有硬伤 → 报而不照办」——
 > **那个框架是错的**,用户当场点破:这不是"哪条更新"的问题。
@@ -445,7 +467,7 @@ reranker(`bge-reranker-base`)也测了:负侧压到 **0.000~0.006** 很干净,
 多变体 × 多任务维度 × **每格 N 次重复** × 真实工具集。**单次运行不能当结论**
 (2026-09-19 实测:同一用例两遍跑出不同结果)。
 
-**已知参照**(`character/tools.py:119` 记录的三轮实验,126 次调用):
+**已知参照**(`character/tools.py` 的 `make_launch_subagent_tool()` 里那段三轮实验注释,126 次调用):
 **触发条件是"她没别的办法",不是"活很长"** —— 做不了的活 64/64 派,做得完的长活 6/52 派。
 
 #### 四、本轮的探针自身缺陷(记下来别再犯)
@@ -575,7 +597,7 @@ full 档加了不多不少 —— 作为"她将来工具集变小"的保险可�
 |---|---|---|
 | 工具自带 | 触发条件写进 description 的**四段式**:① 是什么 ② 收益 ③ 触发条件(破折号列举) ④ 它看不见什么 | ✅ 有 |
 | **专用工具** | `ask_user_question` 的触发条件里明写 **"missing information"** | ❌ **她没这个工具,只能靠正文说话问** |
-| 全局纪律 | agent instructions | ⚠️ `PERSONA` 里"动作纪律"的位置留着,**内容是空的**(`character/personas.py:34` 标着 ⏳ 待定稿) |
+| 全局纪律 | agent instructions | ⚠️ `PERSONA` 里"动作纪律"的位置留着,**内容是空的**(`character/personas.py` 的 `PERSONA` 上方注释标着 ⏳ 待你定稿) |
 
 **"缺信息"在 dsh 里是某条工具自带的触发条件,不是别的工具的约束。** 所以把这条
 规矩塞进 `launch_subagent` 的 usage 才别扭 —— 它是纪律,不是那条工具的用法。
@@ -598,7 +620,7 @@ full 档 · t1-天气 · 各 15 次
    `none` 的基线本身在 15 次下抖 **3~8/15**(20%~53%),所以判"人设单独无效"是稳的。
 
 → **推翻了「动作纪律该放人设」这个常识**(至少对这条规矩)。
-`character/persona.py:62` 写的是架构约定,**不是实测结论**;实测说它单独不生效。
+`character/persona.py` 的 `make_persona_section()` docstring 写的是架构约定,**不是实测结论**;实测说它单独不生效。
 
 **副作用检查(`both`,各 10 次)**:`t2-旧事` / `t3-时间` / `t4-闲聊` / `t5-换衣`
 **全 10/10**;编造 0 次。**零误伤。**
@@ -629,10 +651,10 @@ full 档 · t1-天气 · 各 15 次
 #### 一、已拍(用户明确点头的语义)
 
 1. **往事不再以 `assistant` 身份常驻对话历史** ~~,折成 SYSTEM 一段
-   (挂载点 `character/persona.py:117` 的 `extra_sections`,VISION 预留下的接回点)~~。
+   (挂载点 `character/persona.py` 的 `build_small_night_composer()` 的 `extra_sections`,VISION 预留下的接回点)~~。
    【2026-09-21 21:35 更正】前半句 **✅ 已拍并落地**;后半句(折成 SYSTEM 一段的
    **往事段**)**❌ 已取消** —— 用户拍板往事只走 `recall` 工具,连 section 注册一起删。
-   `character/persona.py:117` 的 `extra_sections` 挂载点**仍在**(现在是 `[timeline,
+   `character/persona.py` 的 `build_small_night_composer()` 的 `extra_sections` 挂载点**仍在**(现在是 `[timeline,
    wake_budget]` 在用),只是不再挂记忆。
 2. **检索做成工具,不做常驻注入**(旧 Yona 的 `life_memory` 注入器已因
    "no candidate relevant 也硬给" 被 `enabled: False`)。✅ 已落地。
@@ -645,7 +667,7 @@ full 档 · t1-天气 · 各 15 次
 
 ```
 personas.VALUES        = {"owner": "主人"}      ← 称呼是**变量**,不许抄死
-core/composer.py:120   lines = [f"- {name}: {usage}"]   ← 工具 usage 通道
+core/composer.py 的 make_usage_section()   lines = [f"- {name}: {usage}"]   ← 工具 usage 通道
 ```
 
 | 通道 | 插值? | 能不能写 `{owner}` | 能不能裸写「主人」 |
@@ -681,8 +703,8 @@ usage:       想不起来的时候用。想找聊过的话 → scope=talk;
              query 用一句话说清找什么,越具体越好。
              **问的是哪一天,就把那天的日期写进 query**。
 ```
-> ⚠️ **不要写成 `usage: recall:想不起来的时候用…`** —— `core/composer.py:120`
-> 是 `f"- {name}: {usage}"`,会渲染成 `- recall: recall:想不起来…`(2026-09-19 端到端视图里抓到)。
+> ⚠️ **不要写成 `usage: recall:想不起来的时候用…`** —— `core/composer.py` 的 `make_usage_section()`
+> 里 `lines = [f"- {name}: {usage}" ...]` 那一行会渲染成 `- recall: recall:想不起来…`(2026-09-19 端到端视图里抓到)。
 
 **④ ~~往事段三常量~~**(`recall_probe.py`;producer 通道 → 不插值,无称呼):
 
@@ -719,7 +741,7 @@ usage:       想不起来的时候用。想找聊过的话 → scope=talk;
 > 1 ⚠️ **只落了一半**:`recall` 那部分 ✅ 已落(`character/tools.py` 的
 > `RECALL_DESC` / `RECALL_USAGE` / `RECALL_PARAM_SCOPE` / `_BOUNDARY_RECALL`);
 > 但**定稿文案 ①(`launch_subagent` 的 usage 追加"缺关键条件先问")与
-> ②(`PERSONA` 的动作纪律)都还没有进产品** —— `character/tools.py:36-58`
+> ②(`PERSONA` 的动作纪律)都还没有进产品** —— `character/tools.py`
 > 的 `_launch_usage()` 全文只有"派活 / 长活 / 看不到对话 / 拿回结论用自己的话说"
 > 四句,`character/personas.py` 的 `PERSONA` 也没有那段纪律。
 > 全库 grep「缺关键条件」只命中 docs 与 `test/recall_stage1_lab.py`(实验臂)。
@@ -729,7 +751,7 @@ usage:       想不起来的时候用。想找聊过的话 → scope=talk;
 1. §三 那四段文案落进 `character/tools.py`(`_launch_usage`)+
    `character/personas.py`(`PERSONA` / `RECALL_USAGE` / 往事段常量)。
 2. `launch_subagent` 的 `description` **补 dsh 四段式缺的那段"收益"**。
-   ⚠️ 待核:`character/tools.py:96-99` 末句「它的中间过程不会进入对话」语义上**就是**
+   ⚠️ 待核:`character/tools.py` 的 `make_launch_subagent_tool()` 里 `description=` 那几行末句「它的中间过程不会进入对话」语义上**就是**
    dsh 那句收益(`so it does not consume this conversation's context`),只是没写成
    目的句。**内容层文案,阶段二一并处理。**
 3. `recall` 的 `b1` 边界文案要不要一起上(**只在工具集变小时有意义**,full 档不多不少)。
@@ -788,8 +810,8 @@ py test/recall_stage1_lab.py --arms full,solo --tasks t1,t2,t4,t5 \
 **同一个 step 里有 ≥2 个工具调用时,`recall` 全部崩。**
 
 ```
-core/loop.py:428   len(calls) == 1 → 主线程;>= 2 → ThreadPoolExecutor  ← 产品既有行为
-test/recall_probe.py:303   sqlite3.connect(":memory:")   ← check_same_thread 默认 True
+core/loop.py 的 _run_tools   len(calls) == 1 → 主线程;>= 2 → ThreadPoolExecutor  ← 产品既有行为
+test/recall_probe.py 的 build_db()   当时写作 sqlite3.connect(":memory:")，默认 check_same_thread=True   ← 就是这个坑
 ```
 
 复现证据(工作线程直接报错,不是推测):
@@ -911,7 +933,7 @@ git diff --name-only -- core character server  →  空
    (`RECALL_DESC` / `RECALL_USAGE` / `RECALL_PARAM_*` / `_MEMORY_*` / `_BOUNDARY_*`),
    三个探针全部 import 它 —— 之前三份手抄已经漂移过。
 7. **`RECALL_USAGE` 里我原来写了个多余的 `recall:` 前缀** ——
-   `core/composer.py:120` 是 `f"- {name}: {usage}"`,会渲染成
+   `core/composer.py` 的 `make_usage_section()` 里 `lines = [f"- {name}: {usage}" ...]` 那一行会渲染成
    `- recall: recall:想不起来的时候用…`。已从定稿里去掉。
 
 #### 九、✅ 补掉的两个洞(同日,阶段一内的)
@@ -1110,7 +1132,7 @@ all=两边都查(只在一边找、怕找不着时用,多带回来的也是相�
 
 #### 三、⚠️ 这条判据是"解释",**不是本轮新测出来的数**
 
-"比值 ≈ 1 不派"**能解释** `character/tools.py:113-121` 那三轮实测:
+"比值 ≈ 1 不派"**能解释** `character/tools.py` 的 `make_launch_subagent_tool()` 里那段三轮实验注释的实测:
 "她做不了的活" 64/64 派(比值 ∞)、"她做得好的长活" 6/52 —— **6/52 那格正是比值接近 1**,
 所以换任何措辞都推不动,那不是文案失败。**别把这条当成本轮的新实验结论引用。**
 
@@ -1148,7 +1170,7 @@ all=两边都查(只在一边找、怕找不着时用,多带回来的也是相�
 | 查什么 | 事实 |
 |---|---|
 | 喂给模型的前缀文案 | **早就写的是"生活事件"** —— `personas.py` 的值 = `"user不在时，角色产生的生活事件：{time}"` |
-| 前缀打在哪些轮上 | `self_turns` = **所有** `source=="self"` 的轮(`session_log.py:331-335`)—— **自走轮与补写轮都打**,不是只有自走轮 |
+| 前缀打在哪些轮上 | `self_turns` = **所有** `source=="self"` 的轮(`core/session_log.py` 的 `derive_messages()` 里那个 `self_turns` 集合)—— **自走轮与补写轮都打**,不是只有自走轮 |
 | 有没有真产出两种东西 | **没有**。"自语"只剩在**变量名 / 内部投影名 / UI 用词 / 文档**里 |
 
 **改名**(标识符 + 术语):
@@ -1411,7 +1433,7 @@ BM25_K   = 4.0      # s/(s+K):把无上界的 BM25 压到 0~1,且**保留绝对�
 - 证据:`test/recall_bench.py`(`hard` / `big` 两套语料)。候选里 RRF 被否
   (91.4% vs 95.1%,牺牲自然问法换字面型)。
 - **⏳ 可调**:w=0.1 → 自然问法 303 / 词面型 522;w=0.2 → 296 / 542。**没定案**,
-  换权重前必须重跑 bench,不许凭手感改(`core/memory.py:40` 已写死这条警告)。
+  换权重前必须重跑 bench,不许凭手感改(`core/memory.py` 的 `W_SPARSE` 上方那句「都是**实测出来的**,别凭手感改」已写死这条警告)。
 
 #### 四、顺手修掉的一处断裂
 
@@ -1465,16 +1487,14 @@ BM25_K   = 4.0      # s/(s+K):把无上界的 BM25 压到 0~1,且**保留绝对�
 **出错的不是用户的拍板,是我写进文档的转述。** 下面两条**已按代码改文档**;
 仍需要用户拍的只是"要哪个行为"。
 
-1. **地板 `_FLOOR = 0.25` 在产品里根本没接线。**
-   `make_recall_tool` 的 `min_score` 默认 `None`(`character/tools.py:328` 注释就写着
-   「产品默认不设」),`server/app/engine.py:294` **只传了 `recall_index`**;
-   `test/test_recall_tool.py:171-179` 甚至断言"不设阈值就该给出来"。
+1. **地板 `_FLOOR = 0.25` 在产品里根本没接线 —— 经实测,这样是对的。**
+   `make_recall_tool` 的 `min_score` 默认 `None`(`character/tools.py` 的 `make_recall_tool()` 里 `min_score` 形参那句注释就写着
+   「产品默认不设」),`server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行**只传了 `recall_index`**;
+   `test/test_recall_tool.py` 的 `test_min_score_can_turn_a_weak_hit_into_empty` 甚至断言"不设阈值就该给出来"。
    而文档(09-19 §二、`RECALL_MVP.md` 零件④)一直写着"只留一道地板 0.25 挡明显无关"。
-   **产品现状 = 低分命中照样返回 `ok`,没有地板挡。**
-   另:`MemoryIndex.top_cos`(`core/memory.py:333`)是为闸门写的,**产品路径零调用者**。
-   → **两条路:(甲) 补上接线(engine 传 `min_score=_FLOOR`);(乙) 改文档(地板只当留着可用的口子)。等用户拍。**
+   → **已按用户口径取证并裁决:不接线**(实测负提升,见上 §二 的 24:00 条)。
 2. **「缺关键条件先问」那句纪律不在产品里。**
-   `character/tools.py:36-58` 的 `_launch_usage()` 全文只有"派活 / 长活 / 看不到对话 /
+   `character/tools.py` 的 `_launch_usage()` 全文只有"派活 / 长活 / 看不到对话 /
    拿回结论用自己的话说"四句;`character/personas.py` 的 `PERSONA` 也没有那段动作纪律;
    全库 grep「缺关键条件」只命中 docs 与 `test/recall_stage1_lab.py`(实验臂)。
    而 09-19 §五 的"待用户签字"清单里,我转述成"已签并落地"。
@@ -1500,7 +1520,7 @@ BM25_K   = 4.0      # s/(s+K):把无上界的 BM25 压到 0~1,且**保留绝对�
 - **写"没有的能力"**:`STRUCTURE.md` 取舍表说"rewrite 暂无向量记忆"、`/presets` 返回 `[]`
   —— 两条都是**能力早已存在**;`FAQ` / `ROADMAP` / 根 `README` 同病。
 - **拿不存在的东西当现状**:`MAP.md`(全仓无此文件,出现在 4 处)、`hot 分支已废弃`
-  (演示模式仍在,`engine.py:981`)、`BACKFILL_SITUATION`(已删)、`_now(log)`(函数不存在)。
+  (演示模式仍在,即 `server/app/engine.py` 里 `hot = os.environ.get("YONA_GATE_HOT") == "1"` 那一行)、`BACKFILL_SITUATION`(已删)、`_now(log)`(函数不存在)。
 - **"已拍未落地"写成"未决"**:每卡独立作息、多卡触发点、`source="subagent"`。
 - **"已落地却还挂在待办"**:`OPEN.md` 里 git init / 预设快照 / UI 快照三件。
 - **数字漂了**:端点 24→**32**、测试 12→**23**、`main.py` ~235→**309** 行、core 八个模块行数全错。
@@ -1513,10 +1533,118 @@ BM25_K   = 4.0      # s/(s+K):把无上界的 BM25 压到 0~1,且**保留绝对�
 #### 七、留给将来的自己的两条
 
 1. **引用行号前先想一下"这段会不会被我改动"**。本轮有 3 处自引用行号是**我自己的编辑**弄漂的
-   (TIMELINE 目录、`SUBAGENT.md` 自引用、`core/loop.py:239` → `:237`)。
+   (TIMELINE 目录、`SUBAGENT.md` 自引用、`core/loop.py` 里 `_system_text` 那个指针)。
    稳妥写法:**引节名 / 函数名,别引行号**;非引行号不可时,把"这段我不动"也一起确认。
+   → 【2026-09-22 已全仓执行】把 `docs/` 与代码注释里**所有** `文件.py:行号` 指针
+   换成了**符号名或可 grep 的引文**(约 250 处;剩下不到 10 处全是"已作废引文/历史记录",
+   旁边都写着"当时写的是…")。**从此不要再往文档里写行号。**
 2. **`docs/pitfalls/HISTORY.md §五` 这个"过时项安全区"以前是假的** —— 它只登记了 4 类,
    而 STRUCTURE 里另有 6 类过时没登记。**登记清单本身也会烂**,要定期跟被登记的文件对表。
+
+---
+
+### 2026-09-22 00:45 · 代码全量彻查(僵尸 / 草包 / 越界 / 错接线)+ 指针去行号化
+
+#### 一、用户原话(两个任务)
+
+> 「我都忘了这个 floor 是干嘛的了怎么定?**如果之前做过测试包含它,而且确实有正提升的话
+>  就去做吧,没有就保持原样**,我这次只是来处理文档和 skill 问题的。」
+> 「然后,你去彻查一下这次代码是否有**臃肿、越界、调用了错误位置的函数活参数**等当时在写代码
+>  的时候难发现,现在重新读一遍就能看出来的**坏味道、僵尸、草包代码**?有的话修复掉,
+>  **我需要精致的版本**,如果有些是未排版但是当前版本明确需要它作为某处结构支撑,但实际
+>  不太影响最终结果的,**保持一个占位,并且标准好**,达到未来真的动起来就能**无压力、
+>  干脆利落手术掉**的程度」
+
+#### 二、floor 的裁决:✅ **不接线**(而且这本来就是对的)
+
+跑 `test/recall_bench.py --corpus both` 取「余量(纯余弦,闸门口径)」:
+
+| 语料 | 负例最高余弦 | 可答最低余弦 | 余量 |
+|---|---|---|---|
+| hard(48 条) | 0.338 | 0.481 / 0.499 | +0.142 / +0.161 ✅ 分开 |
+| **big(315 条)** | **0.439** | 自然问法 **0.395** | **−0.044 ❌ 重叠** |
+| | | 词面型 **0.206** | **−0.232 ❌ 重叠** |
+
+**没有正提升、有负提升** —— 一条真答案(语料里的「B-412」)最高余弦只有 0.206,0.25 的地板
+会把它**当成"确实没有"挡掉**;负例那头的 0.439 它也挡不住。依据写进 `character/tools.py`
+的 `_FLOOR` 注释(含这张表),并标成 `⏸ 占位,未接线`。探针那份副本也同步了(它原来是旧口径)。
+
+#### 三、彻查方式与规模
+
+**4 个只读审查代理**(`core/` / `server/` / `character+lab` / 跨文件僵尸与接线),
+**5 个实现代理**按文件分头改,**2 个代理**做行号指针去行号化。合计 11 个代理。
+改动面:代码 **~30 个文件**、文档 15 个。
+
+#### 四、⭐ 抓到的三处**真 bug**(都是静默的,症状都长得像"她/它本来就那样")
+
+1. **手动脉冲漏传 `sid`** → `_recall_sid["sid"]=None` → `recall_index()` 返回 None →
+   她收到的是「**检索没能跑起来**」这句 → **她会对用户说"我想不起来"**,而事实只是引擎不
+   知道翻哪张卡。同一轮里 worker 因 `sid is None` 跳过 `memory_sync`,脉冲产出的生活事件
+   不进索引。另漏 `mark_self()`,脉冲后不进心跳冷却。
+   → 修:`server/main.py` 补 `sid=sid` + `mark_self()`(判空),并把"三个自走入口都必须
+   做这两件事"写进 docstring。
+2. **`/bg-position` 是个"永远成功"的空壳** → 写接口函数体只有 `return {"status":"ok"}`,
+   `_bg_positions` **全仓只被读、从不被写**,而前端传的 `session_id` 还被 pydantic
+   **静默丢弃**(`BgBody` 只声明了 `position`)。两端都是 200,**"记住背景位置"彻底失效且查不出来**。
+   → 修:`BgBody` 加 `session_id`(含 id 校验),真的写进 dict。
+3. **内心面板的投影没有应用 shadow** → 用户**删掉**的生活事件、tool 痕迹**还在面板里**
+   (`view.py` 全文件连 `shadow` 这个词都没出现过)。core 的真投影会跳,view 自己重写的那份不会。
+   → 修:两个投影函数都读 `log.shadowed_seqs()` 并跳过;并标"这是**第二份实现**,改 core 要同步"。
+
+**三处都实测验证过**(不是静态推导):`shadowed_seqs={2,3,4}` → 轨迹 `[]`、面板里旧事件消失;
+写入 0.42 → 读回 0.42;脉冲段含 `sid=sid` 与 `mark_self()`。
+
+#### 五、清掉的坏味道(按用户给的五类)
+
+- **僵尸**(定义了零调用 → 删):`session_log` 的 5 个块类型别名整簇、`assembler` 的
+  `FINISH_TOOL_CALLS`/`FINISH_STOP`、`loop.AgentLoop.is_busy()`、`engine.resolve_model()`
+  (**而且 `chat.py` 的注释还指着它说"校验在这里"**)、`store._now_iso_sortable()` + 它唯一服务的
+  那段**死排序**、`store.ensure_flagship()`、`session_log.derive_messages` 的 `last_n`
+  (**项目自己立过判例:「留个死旋钮比删掉更坏」**)。
+- **草包**:`engine.system_component_sections` **每段 render 三遍**;`chat.py` 在
+  `save_log` 之后又 `touch_session`(**重复读+写 meta**);`subrun.from_json` 里一行
+  **必被覆盖**的赋值;`memory_cache` 线程退出但 `_running` 不落(状态永远报"在跑");
+  `heartbeat` 的 `time.sleep(min(0.2, 负))` 可能抛 `ValueError` 把线程带走;
+  `recall` 的 `day_fallback` 分支**不可达**(产品与探针都删了);`character/state.register()`
+  连测试都没有。
+- **错接线**:「回放轮」判定**4 处各写一遍** → 收口成 `engine._is_backfill(log)`(配套
+  `_epoch_now` / `_values`);同一个 `max_steps=8` 在主轮与子运行**撞数但语义无关**;
+  `SUBAGENT_FILE_ROOT` 其实有**两道闸门**(params 的根 + `_WORKER_WEB_TOOLS` 白名单),
+  只改 params **不会生效**;`_usage_suffix` 收成一份。
+- **越界**:`core/composer.py` 里**三处模型可见文案** + 「主人」是把 `VALUES["owner"]` **抄死**了
+  (producer 通道**不插值**,改称呼要回来改内核);`loop.on_chunk` 的注释把产品级 SSE
+  传输口说成"调试钩子";`worker_tools` 的 4 段模型可见文案住在 `server/`。
+  → **都加了标注,没搬**(搬会改模型可见文本,属产品决策)。
+- **占位标注**(保留 + 写清"为什么留 / 什么时候动 / 手术删哪几行"):`top_cos`(闸门将来唯一
+  现成实现)、`SubRunStore` + `parent`(子运行轨迹**从不落盘**,事后查不到工人干了什么)、
+  `MemoryCache.status()`(`warm()` 承诺的"降级原因"没有出口)、`embed.info/loaded`、
+  `llm.invoke` / `AssistantOutput.reasoning`、`composer.set_enabled/unregister`、
+  `/objects`(冻结契约位)、`/runtime/status`、`/health`、`/models`、`chat.sensory`、
+  `character/state.register/get`、`core/subrun.STATUS_KILLED`、`gate.next_interval`。
+
+#### 六、⭐ 系统性教训:**行号指针是负债**
+
+代码清理插了大量注释 → **全仓约 250 处 `文件.py:行号` 指针被顶偏**(被引最多的那处
+`core/composer.py:120` 漂到 `:193`)。
+→ **全部换成符号名或可 grep 的引文**(19 份文档 + 25 个 `.py` 注释);剩下不到 10 处全是
+"已作废引文 / 历史记录",旁边都写着"当时写的是…"。
+→ **规矩落进 `docs/README.md`**:从此不往文档里写行号;行数/端点数/测试数一律以代码为准。
+
+#### 七、验证
+
+- **23 个 `test/test_*.py` 全过**(改了 ~30 个代码文件之后);
+  `test/recall_probe.py` `exit=0`;全仓 `ast.parse` 全过。
+- 三处行为改动**另有独立实测**(见 §四)。
+- 指针去行号化那一轮用**"反演对拍"**证明代码级零改动(把我这轮的 93 条编辑整体反演回改前
+  状态,再剥掉注释/docstring 比 token 流 —— 25 个文件全部 IDENTICAL,被碰的 138 行全是
+  注释/docstring/空行)。
+
+#### 八、⏳ 留给用户拍的(已登记 `docs/tasks/OPEN.md` 第二张表)
+
+产品人设 **18 岁 vs 21 岁**(6 个探针还写 21)、`CHAT_SITUATION` 写死"你也有一些tool可用"、
+`composer` 三处文案要不要搬、工人工具文案归属、**删光消息的卡还算不算"激活"**、
+子运行要不要留轨迹(会新增落盘目录)、主轮 `max_steps` 与心跳 `jitter` 要不要进 params、
+**core 的四组默认值与 params 不一致**(漏传就吃旧值,`test/` 里 16 处构造正吃着)。
 
 
 

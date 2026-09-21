@@ -152,8 +152,8 @@
 
 ### 二.1. ⛔ 工具是**并发**跑的,后端必须线程安全
 
-`core/loop.py:427-429` —— 同一个 step **≥2 个工具调用**就走 `ThreadPoolExecutor`
-(1 次调用走主线程,别把行号记成 `428`),而 `sqlite3.connect()` 默认
+`core/loop.py` 的 `_run_tools` —— 同一个 step **≥2 个工具调用**就走 `ThreadPoolExecutor`
+(1 次调用走主线程;**别记行号,以符号为准** —— 行号会漂),而 `sqlite3.connect()` 默认
 `check_same_thread=True` → 两次调用**同时崩**。
 
 **症状极具欺骗性**:工具老实报 `down` → 她说"我翻不到" → **看起来是她记性不好**。
@@ -170,10 +170,10 @@
 > **规则**:内容层文案 **只有一处来源**。
 > ⚠️ 【2026-09-21 23:00 更正】**单一来源已经搬到产品里了** ——
 > 现在是 `character/tools.py` 的 `RECALL_DESC` / `RECALL_USAGE` /
-> `RECALL_PARAM_SCOPE`(`:193/:209/:245`),而 `test/test_recall_tool.py:20-22`
-> **反过来 import 产品那份**。
-> 但 `test/recall_probe.py`(`:98/:127/:133/:196`)仍留着一份**逐字副本**
-> 用于变体实验,`recall_router_probe.py` / `recall_e2e.py` 从探针 import。
+> `RECALL_PARAM_SCOPE`(三个都在 `character/tools.py`,以符号名为准),而 `test/test_recall_tool.py`
+> 顶部那句 `from character.tools import (` **反过来 import 产品那份**。
+> 但 `test/recall_probe.py` 的 `RECALL_DESC` / `RECALL_USAGE` 那几份**逐字副本**
+> 仍留着用于变体实验,`recall_router_probe.py` / `recall_e2e.py` 从探针 import。
 > **所以改产品文案时必须同步两份** —— 或者哪天把探针也改成 import 产品那份。
 
 ### 二.3. ⛔ 通道**不插值**时,称呼是雷
@@ -185,7 +185,7 @@
 
 ### 二.4. ⛔ `composer` 会替她拼 `- {name}: `
 
-`core/composer.py:120` 是 `f"- {name}: {usage}"` ——
+`core/composer.py` 的 `make_usage_section()` 里 `lines = [f"- {name}: {usage}" ...]` 那一行 ——
 usage 里再写 `recall:` 就渲染成 `- recall: recall:想不起来的时候用…`。
 
 ### 二.5. ⛔ 报表块自己崩了 = 整轮白跑
