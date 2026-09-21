@@ -18,8 +18,11 @@
 from __future__ import annotations
 
 import json
+import re
+import time
 from typing import Any, Callable, Sequence
 
+from core.memory import SCOPES, MemoryIndex
 from core.tools import Tool
 
 from .state import CharacterState
@@ -160,3 +163,382 @@ def _apply_outfit(state: CharacterState, args: dict[str, Any]) -> str:
             return msg
         changed.append(msg)
     return f"已更换穿着: {' | '.join(changed)}。当前: {state.project()}"
+
+
+# ============================================================
+# 回忆工具(recall)
+#
+# 2026-09-21 从 `test/recall_probe.py` 毕业(用户拍板"整套搬")。
+# 搬家时**一字未改**:四态语义、日期抽取、灰区线、以及结果的每一句措辞
+# 全部原样 —— 那些是实测调出来的,证据就在下面的注释里。
+# ⏳ 会落到她眼前的固定串都标了「⏳阶段二」:那些字用户要自己收拾,
+#    **别顺手"优化"** —— 注释里记着砍字砍掉过什么。
+#
+# 与探针版**唯一**的区别是底座:探针在 SQL 里现算余弦 + BM25,
+# 这里改用 `core.memory.MemoryIndex`(混合检索的单一实现)+
+# `core.memory_cache`(向量缓存)。**打分口径不变**:
+#   排序 = 余弦 + W_SPARSE·BM25(两路都绝对刻度);闸门/灰区只看余弦。
+# ============================================================
+
+RECALL_NAME = "recall"
+
+# ══════════════════════════════════════════════════════════════════
+# ★ 定稿(2026-09-19)—— 照着 dsh 的真实工具文案重写,并实测过
+#
+# **最关键的一条:「它看不见什么」要声明能力边界,不是枚举禁用场景。**
+#   旧版写「问天气、新闻、价钱、别人现在怎么样…别用」—— 那是**枚举**,又长又漏。
+#
+# ⚠️ 但**我后来又把这条结论推翻了一半**,见下面 usage 那段的实测。
+# ══════════════════════════════════════════════════════════════════
+RECALL_DESC = (
+    "回想过去的事 —— 你们聊过的话,或你一个人时做过的事。"
+    "想不起来的时候用它。"
+    "它只有过去:看不见现在的事,也看不见外面的事。"
+)
+
+# ⭐ 2026-09-19 高 reps(N=25)实测 —— **推翻了我前面的两次判断**:
+#   「你之前说早上在写日记」自造日期:     88 字版 14/25 · 111 字短句版 15/25 · 242 字旧版 **1/25**
+#   「今天天气怎么样」触发一致(不该调):   88 字版 17/25 · 111 字版 22/25 · 242 字旧版 **24/25**
+#
+#   → **约束类的文案,砍了就松。** 短句("日期不确定就别写")和长句差 14 倍,
+#     差别就在**有没有那个例子**(「9月16日我做了什么」)。
+#   → 我先前那套"应该声明能力边界、不该枚举禁用场景"的说法**是错的**:
+#     真正起作用的是**枚举里那个具体的词**("天气"两个字直接写在里面)。
+#   ★ 结论:**这套文案的冗余是"负重"的,砍内容会掉性能;能删的只有重复。**
+#     想动它之前先看上面这几行数,别凭"看着臃肿"就下手。
+RECALL_USAGE = (
+    "query 用一句话说清找什么,越具体越好。"
+    "问现在或外面的事(天气、新闻、价钱、别人现在怎么样),它查不到,别用。"
+    "**只有你确定是哪一天,才把日期写进 query**(如「9月16日我做了什么」);"
+    "不确定就别写日期,用自己的话描述 —— 写错日期会直接查不到,比不写更糟。"
+)
+
+# ⛔ **边界那句在 desc 里,不许挪走、不许删**(实测):
+#   从 desc 拿掉 → 天气那格 24/25 掉到 **19/25**;两处都不说 → 21/25。
+#   **能删的只有重复,不是内容。**
+RECALL_PARAM_QUERY = "要回忆什么,用一句话说清(必填)"
+
+# ══════════════════════════════════════════════════════════════════
+# ★ 2026-09-20 —— **`all` 的定义**(用户给的,**已采纳**;别再自己编)
+#
+#   > all 的用处就是**单边找不出来的风险比较大,选用 all 少一轮补充调用的风险**。
+#   > 就拿「你之前说早上在写日记,都记了些什么呀」举例:talk 里面**提过**日记
+#   > 这件事,但**日记内容不太可能对话里展现出来**,问的又真的是"日记的内容",
+#   > 得找宽一点,所以才 all。并且这时候把 talk 那部分找回来了,**也算是一种
+#   > 情景复现**,提供更多高相关上下文,拿回来的是**有益的东西**,不是需要
+#   > 选择性完全丢弃无视的东西。
+#
+# **`all` = 风险对冲**(单边查不到的风险 > 多带一条的风险),不是"我没判断"的兜底。
+#
+# ⛔ 我(助手)先写错过一版:`s1` 说「两类都真要才用 all」。**两处都错**:
+#      ① 把 all 的门槛提到"两类都真要"(它本来是"单边风险大"就该用);
+#      ② 把多带回来的那条说成**代价**(用户说它是**有益的上下文**)。
+#    而且我压根没给 all 写过定义 —— schema 里只有 `all(默认)` 三个字、零语义。
+#    **没立过法,只立了个默认,难怪推不动。**
+#    → 更贵的一层:我还顺着误读**把判据改错了**,于是"合规"从满分掉到 1/12,
+#      我又拿这个自己造的低分去"修"了三轮。**治的是个不存在的病。**
+#
+# 实测(采纳前 vs 采纳后):10/10 对 10/10、全用例 12/12 对 12/12 ——
+# **中性**。所以它是**把零语义换成一句真定义**,不是行为改进。
+# 谁再想改它:先读上面那段引语,别又凭"看着啰嗦"下手。
+# ══════════════════════════════════════════════════════════════════
+RECALL_PARAM_SCOPE = (
+    "life=你独自做的事 / talk=聊过的话 / "
+    "all=两边都查(只在一边找、怕找不着时用,多带回来的也是相关的情景)"
+)
+
+# 结果侧的边界(⏳ 2026-09-19 端到端驱动):光给事实不够,还得说明**事实的边界在哪**。
+# 实测她把 2~4 行的记忆当种子,围着它补出材料里没有的细节(最重的一例:材料没提"交",
+# 她编出"周五交上去了",还把另一条记忆里的学姐缝进论文的回答)。
+# ⏳阶段二:这句会落到她眼前。
+_BOUNDARY_RECALL = (
+    "\n**只说这上面写着的。上面没写的细节就是没有 —— 别替自己补。**"
+)
+
+# 结果四态 —— **给角色的话必须分开,不能混**
+#   故障说成"没这回事"会出事;没找着说成"想不起来"会像天天失忆。
+R_OK = "ok"              # 找到相关的
+R_EMPTY = "empty"        # 服务正常,确实没有相关的  → 不许说"想不起来"
+R_DEGRADED = "degraded"  # 退而求其次(语义路塌了 / query 没给)
+R_DOWN = "down"          # 检索整个跑不起来        → 示弱,别硬猜
+
+# **只挡明显无关的地板**,不是"相关性判据"(2026-09-19 实测证伪:
+# 同一件事换措辞,bi-encoder 分数在 0.358~0.422 之间横跳,硬判会误杀正确答案)。
+_FLOOR = 0.25             # < 这个数基本可以确定不相关(bge-large-zh 实测 0.216)
+_GREY_TOP = 0.45          # < 这个数 → 给结果,但**标明不确定**
+
+
+# ---------- 日期抽取(元数据路由,不是打分) ----------
+# 只认**日级**明确说法。不认"9月开学""三年前""上周"这种 —— 那些要么没有日,
+# 要么范围太粗,猜错了比不猜更糟。
+_RE_YMD = re.compile(r"(?:(\d{4})\s*[-/年]\s*)?(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*日?")
+_RE_REL = [("大前天", -3), ("前天", -2), ("昨天", -1), ("今天", 0)]
+_RE_WEEKDAY = re.compile(r"周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]")
+
+
+def extract_day_range(query: str, now_ts: float):
+    """从 query 里抽一天窗口。返回 (start, end, 命中的原文) 或 None。
+
+    年份省略时按"不能是未来"推:算出来比现在晚一天以上,就退回上一年
+    (跨年边界:12 月问"1月5日"、1 月问"12月28日")。
+    """
+    now = time.localtime(now_ts)
+    hit = None
+    y = m = d = None
+    if (mo := _RE_YMD.search(query)):
+        y = int(mo.group(1)) if mo.group(1) else None
+        m, d = int(mo.group(2)), int(mo.group(3))
+        hit = mo.group(0)
+    else:
+        for word, delta in _RE_REL:
+            if word in query:
+                t = time.localtime(now_ts + delta * 86400)
+                y, m, d = t.tm_year, t.tm_mon, t.tm_mday
+                hit = word
+                break
+    if hit is None:
+        return None
+    if not (1 <= m <= 12 and 1 <= d <= 31):
+        return None  # 月份/日子不合法:不当时间用(宁可不过滤)
+    if y is None:
+        y = now.tm_year
+    start = time.mktime((y, m, d, 0, 0, 0, 0, 0, -1))
+    if start > now_ts + 86400:
+        start = time.mktime((y - 1, m, d, 0, 0, 0, 0, 0, -1))
+    return start, start + 86400, hit
+
+
+def strip_time_words(query: str, hit: str) -> str:
+    """把时间词从 query 里剥掉 —— 库里没有日期,留着只会污染向量。"""
+    q = query.replace(hit, " ")
+    q = _RE_WEEKDAY.sub(" ", q)
+    q = re.sub(r"\s+", " ", q).strip(" ,，。、的")
+    return q or query  # 剥空了就退回原句(总比没 query 强)
+
+
+def _fmt(ts: float) -> str:
+    return time.strftime("%m-%d %H:%M", time.localtime(ts))
+
+
+def make_recall_tool(
+    index_fn: Callable[[], MemoryIndex | None],
+    *,
+    limit: int = 2,
+    limit_fn: Callable[[dict], int] | None = None,  # 产品侧算条数的钩子;默认常数 2
+    min_score: float | None = None,   # 相似度下限;None = 不设(产品默认不设,见 _FLOOR)
+    now_fn: Callable[[], float] | None = None,      # 时间抽取用的钟
+    boundary: bool = True,            # 结果侧"别补细节"边界句(MVP 默认开)
+    verbose: bool = False,
+) -> Tool:
+    """检索工具:参数路由 —— 查什么数据(scope)× 怎么匹配(query 有没有)。
+
+    **模型只填 query 和 scope。** `limit` **不进 schema** —— 它是产品侧按上下文
+    预算算出来的(默认 2)。口子不开,模型就填不出 -1(返回全库)或 "abc"。
+    limit 硬约束:**永远 ≥ 1**(2026-09 用户拍板"不准关")。
+
+    index_fn: **装配处**注入 —— 返回"现在这张卡"的记忆索引(或 None = 引擎没起来)。
+        ⚠️ 必须**每次调用现取**,不能构造时抓一份:一张 AgentLoop 服务所有卡,
+           而"现在这张卡"是**每一轮**才知道的事(engine 在 turn 队列里设)。
+
+    verbose: 测试与实验台用;产品里关掉(每次调用的明细会淹没真日志)。
+    """
+
+    def _limit_of(args: dict) -> int:
+        n = limit_fn(args) if limit_fn else limit
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            n = limit
+        return max(1, n)  # 防御性下限(算法落地后本来也不会出 0)
+
+    def _time_rows(index: MemoryIndex, scope: str, n: int) -> list:
+        """退化路径:按时间倒序取前 n 条(不带语义)。"""
+        rows = [r for r in index.rows if scope in (None, "all") or r.kind == scope]
+        rows.sort(key=lambda r: -r.time)
+        return rows[:n]
+
+    def _run(args: dict) -> dict:
+        """结构化结果(测试断言用);`_recall` 只负责把它渲染成给角色的话。"""
+        query = str(args.get("query") or "").strip()
+        scope = str(args.get("scope") or "all").strip()
+        bad_scope = scope not in SCOPES
+        # 范围不认识 → **放宽到全部,但必须说出来**(探针语义,一字不改)
+        eff_scope = scope if scope in SCOPES else "all"
+        n = _limit_of(args)
+
+        index = index_fn()
+        if index is None:
+            return {"state": R_DOWN, "why": "no_index", "items": [], "query": query,
+                    "scope": scope, "applied_scope": None, "scores": [],
+                    "nearby": [], "day": None}
+
+        # ---- 时间抽取:抽到就变元数据过滤,并把时间词从 query 剥掉 ----
+        now_ts = (now_fn or time.time)()
+        day_hit = extract_day_range(query, now_ts) if query else None
+        day = (day_hit[0], day_hit[1]) if day_hit else None
+        q_sem = strip_time_words(query, day_hit[2]) if day_hit else query
+
+        rows: list = []
+        scores: list = []
+        nearby: list = []
+        nearby_scores: list = []
+        try:
+            if not query:
+                # query 没给 = **降级落点**(不是模型可选模式):给时间序 + 说明
+                rows = _time_rows(index, eff_scope, n)
+                state, why = R_DEGRADED, "no_query"
+            elif not index.has_semantic_route:
+                # ⚠️ 语义路塌了(没有嵌入器 / 一条向量都没补上)。
+                #    `MemoryIndex.search` 对嵌入器异常是**吞掉**的(只剩关键词),
+                #    所以必须**先判**,否则会悄无声息地变成"只有关键词",
+                #    而症状是"她记性变差",查不到真因。
+                rows = _time_rows(index, eff_scope, n)
+                state, why = R_DEGRADED, "semantic_failed"
+            else:
+                hits = index.search(q_sem, limit=n, scope=eff_scope, day_range=day)
+                if min_score is not None:
+                    hits = [h for h in hits if h.cos >= min_score]
+                rows = [h.row for h in hits]
+                scores = [round(h.cos, 4) for h in hits]
+                if bad_scope:
+                    state, why = R_DEGRADED, "bad_scope"
+                elif not rows and day:
+                    # 那天一条都没有。**状态语义一个字不改** ——
+                    # empty/day_empty 就是拍板过的"确实没有",不许动。
+                    # 但顺手**再查一次不带时间过滤的**,把前后的事附在后面:
+                    # 实测她写的那个日期很可能是**自己猜的**(问"你之前说早上
+                    # 在写日记",她写「今天早上」)。猜错一个日期就空手回去,
+                    # **加提示词规则治不好**(实测:带日期规则的 2/24、
+                    # 完全不带日期规则的也 2/24)—— 所以治在机制上,
+                    # 让猜错日期的代价从「查不到」降到「查到的不是那天的」。
+                    hits2 = index.search(q_sem, limit=n, scope=eff_scope)
+                    nearby = [h.row for h in hits2]
+                    nearby_scores = [round(h.cos, 4) for h in hits2]
+                    state, why = R_EMPTY, "day_empty"
+                else:
+                    state, why = (R_OK if rows else R_EMPTY), ""
+        except Exception:
+            # 连时间序都跑不动 = 检索整个不可用
+            return {"state": R_DOWN, "why": "backend_down", "items": [],
+                    "query": query, "scope": scope, "applied_scope": eff_scope,
+                    "scores": [], "nearby": [],
+                    "day": day_hit[2] if day_hit else None}
+        return {"state": state, "why": why, "query": query, "scope": scope,
+                "applied_scope": eff_scope, "scores": scores, "sem_q": q_sem,
+                "day": day_hit[2] if day_hit else None, "items": [
+                    {"time": _fmt(r.time), "kind": r.kind, "text": r.text[:200]}
+                    for r in rows
+                ],
+                "nearby": [
+                    {"time": _fmt(r.time), "kind": r.kind, "text": r.text[:200]}
+                    for r in nearby
+                ],
+                "nearby_scores": nearby_scores}
+
+    _WHY_TEXT = {"no_query": "你没说清找什么",
+                 "semantic_failed": "检索这一步没跑成",
+                 "bad_scope": "你给的范围我不认识,按全部找了",
+                 "day_fallback": "你写的那天没有记录"}
+    # 这三种是"退了时间序",措辞要说清下面是什么;bad_scope 不是。
+    _TIME_FALLBACK = ("no_query", "semantic_failed")
+
+    def _render(r: dict) -> str:
+        return _render_body(r) + (_BOUNDARY_RECALL if boundary else "")
+
+    # ⏳阶段二 —— 下面整段 `_render_body` 的每一个固定串都会落到她眼前。
+    #   用户已认领这批字要自己收拾。**搬过来时一字未改**;要动先读上面的证据注释。
+    def _render_body(r: dict) -> str:
+        q = r["query"]
+        items = r["items"]
+        if r["state"] == R_DOWN:
+            return ("[回忆] 这会儿想不起来了 —— 检索没能跑起来。"
+                    "别硬猜,就说一时想不起来。")
+        if r["state"] == R_EMPTY:
+            if r["why"] == "day_empty":
+                # 生活事件是**抽样**生成的:没记录 ≠ 那天没发生
+                head = (f"[回忆] 「{r['day']}」这段时间,**你这边没留下什么记录**。\n"
+                        "这不是「你那天什么都没做」—— 只是没记下来。"
+                        "**别硬编那天做了什么**,就说想不太起来了。")
+                nb = r.get("nearby") or []
+                if nb:
+                    # 她写的日期很可能是自己猜的(实测:问过去的事她写「今天早上」)。
+                    # 那天确实没记录 —— 这句不变;但**前后的事**附在后面,
+                    # 让猜错日期的代价从"查不到"降到"查到的不是那天的"。
+                    # 措辞必须两头都说死:日期不对 + 别当成那天的。
+                    head += ("\n另外,**前后这几天**你有下面这些 —— "
+                             "**不是那天的**,别当成那天的说;"
+                             "但也许你要找的东西在里面:")
+                    head += "\n" + "\n".join(
+                        f"{it['time']} {it['text']}" for it in nb)
+                return head
+            return (f"[回忆] 关于「{q}」没有查到。这是**确实没有相关的事**,"
+                    "不是你想不起来 —— 别为它编内容。")
+        lines = [f"{it['time']} {it['text']}" for it in items]
+        if r["state"] == R_DEGRADED and r["why"] == "day_fallback":
+            # 她说了一个日期、那天没记录,但去掉过滤**能查到东西**。
+            # 措辞必须两头都说清:那天确实没记 + 下面这些**不是那天的**。
+            head = (f"[回忆] 「{r['day']}」这段时间**没有记录**。"
+                    f"下面这几条是**前后**的事 —— 别当成那天的,"
+                    "先看看是不是你要找的:")
+            return head + "\n" + "\n".join(lines)
+        if r["state"] == R_DEGRADED:
+            mid = ("下面只是那段时间前后的事 —— " if r["why"] in _TIME_FALLBACK
+                   else "")
+            what = f"「{q}」" if q else "你要找的东西"
+            head = (f"[回忆] 没能按你说的找到{what}"
+                    f"({_WHY_TEXT.get(r['why'], r['why'])})。"
+                    f"{mid}**退而求其次,别当成就是这些**:")
+        else:
+            top = r["scores"][0] if r["scores"] else None
+            if top is not None and top < _GREY_TOP:
+                # 实测:同一件事换种措辞分数能从 0.42 掉到 0.36 —— 灰区**不许硬判**,
+                # 硬判会误杀正确答案(学姐那条被挡过 4 次,检索其实每次都对)。
+                head = (f"[回忆] 可能跟「{q}」有关(**不是很确定**),共 {len(lines)} 条 —— "
+                        "先看看对不对,别当成准的讲:")
+            else:
+                head = f"[回忆] 与「{q}」相关,共 {len(lines)} 条:"
+        return head + "\n" + "\n".join(lines)
+
+    def _recall(args: dict) -> str:
+        r = _run(args)
+        if verbose:
+            print(f"        参数: scope={r['scope']!r} query={r['query']!r} "
+                  f"limit={_limit_of(args)}(产品侧算,默认 {limit})")
+            if r.get("day"):
+                print(f"        时间: 抽出「{r['day']}」→ 元数据过滤;"
+                      f"送去 embed 的是 {r['sem_q']!r}")
+            print(f"        状态: {r['state']}" + (f" ({r['why']})" if r["why"] else ""))
+            for i, it in enumerate(r["items"]):
+                sc = f"{r['scores'][i]:.3f}  " if i < len(r["scores"]) else ""
+                print(f"        · {sc}[{it['kind']:4}] {it['time']}  "
+                      f"{it['text'][:66].replace(chr(10), ' ')}")
+        return _render(r)
+
+    tool = Tool(
+        name=RECALL_NAME,
+        description=RECALL_DESC,
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": RECALL_PARAM_QUERY,
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": list(SCOPES),
+                    "description": RECALL_PARAM_SCOPE,
+                },
+            },
+            "required": ["query"],
+        },
+        func=_recall,
+        # ⚠️ usage **必须挂在这里**(两条通道缺一条它就瞎半只眼,见本文件开头):
+        #    `core/composer.py:120` 的 make_usage_section 是
+        #    `f"- {name}: {usage}" for name, usage in reg.usage_entries()`
+        #    —— 它只读 **Tool 上**的 usage。不挂 = SYSTEM 里没有这段 =
+        #    她不知道这个工具怎么用得好(触发率和参数合规率都会掉)。
+        usage=RECALL_USAGE,
+    )
+    tool.run_structured = _run  # 测试与实验台用:直接断言结构化结果
+    return tool

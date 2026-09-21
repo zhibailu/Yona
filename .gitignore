@@ -10,6 +10,10 @@ __pycache__/
 # 运行数据(会话日志/生活日志/图片 —— 不进版本库)
 data/
 
+# 记忆索引缓存(sqlite):从 chat.log 派生的可重建产物,不是数据 ——
+# 放 data/ 会让人以为它要备份;删掉只损失一次重建时间。见 core/memory_cache.py
+cache/
+
 # ����ʱ LLM ����(�� api_key,UI ��д��;data/ ����Ŀ¼����,������ʽ���������)
 data/llm.local.json
 

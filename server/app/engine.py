@@ -25,10 +25,15 @@ from character.persona import build_small_night_composer
 from character import personas as personas_mod  # noqa: E402 文案(内容层);装配时现取属性,
 # 不用 from-import 绑死 —— 改文案后 reload 模块 + 重建引擎即生效(2026-09)
 from character.state import CharacterState
-from character.tools import make_change_outfit_tool, make_launch_subagent_tool
+from character.tools import (
+    make_change_outfit_tool, make_launch_subagent_tool, make_recall_tool,
+)
 from core.composer import SystemSection, make_timeline_section  # noqa: E402
+from core import embed as embed_mod
 from core.heartbeat import Heartbeat
 from core.loop import AgentLoop
+from core.memory import MemoryIndex, rows_from_events
+from core.memory_cache import MemoryCache
 from core.openai_compat import OpenAICompatibleLLM
 from core.session_log import SessionLog
 from core.subrun import SubRunSpec, execute as execute_subrun
@@ -52,6 +57,9 @@ from ..params import (  # noqa: E402
     HOT_WAKES_PER_DAY,
     LLM_DEFAULT_TEMPERATURE,
     LLM_OUTPUT_MAX_TOKENS,
+    MEMORY_CACHE_DIRNAME,
+    MEMORY_POLL_SEC,
+    MEMORY_DEBT_MAX_WAIT_SEC,
     SELF_WAKES_PER_DAY,
     SUBAGENT_FILE_ROOT,
     SUBAGENT_MAX_STEPS,
@@ -63,6 +71,12 @@ from ..params import (  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent.parent
 # 数据目录:默认 data/;YONA_DATA_DIR 可指到独立目录(验证/演示不脏真实数据)。
 DATA_DIR = Path(os.environ.get("YONA_DATA_DIR", str(ROOT / "data")))
+
+# 记忆索引缓存:顶层 cache/(用户 2026-09-21 拍板 —— 它是从 chat.log 派生的
+# **可重建**产物,放 data/ 会让人以为它要备份)。与 DATA_DIR 一起可被
+# YONA_DATA_DIR 之外的环境变量单独指走,验证/演示不脏真实缓存。
+MEMORY_DIR = Path(os.environ.get(
+    "YONA_CACHE_DIR", str(ROOT / MEMORY_CACHE_DIRNAME)))
 
 # 2026-09 每卡 life:不再有匿名全局 "_life" 生活流 —— 生活属于卡片本身,
 # 写进"最近激活的那张卡"的 chat.log(source=self);常驻保底旗舰卡 = Yona
@@ -178,8 +192,112 @@ def _run_worker(task: str, label: str) -> dict:
 _tools.register(make_launch_subagent_tool(
     _run_worker, capabilities=_worker_capabilities()))
 
+# ---------- 记忆索引(recall 的底座;2026-09-21 装配) ----------
+# 一张卡一个缓存文件 + 一个常驻后台线程("吃性能剩饭"补向量)。
+# 设计判定全在 core/memory_cache.py 与 core/embed.py 的模块头,这里只说接线:
+#
+# ① **一进程一份嵌入器**:torch 是进程级的,几张卡共用同一个模型(否则一张卡
+#    一份 1.2 GB 权重)。它**懒加载**:拿到句柄不代表加载了权重。
+# ② **暖机排在补账前面**:后台线程第一件事是 warm(实测 4.18 s),所以那 4 秒
+#    落在"引擎刚起来、UI 还在连"那段空白,而不是"她刚问完、正等回答"那一刻。
+# ③ guard = `_lock`(非阻塞让路):turn worker 跑一项的整段时间都持它,所以
+#    后台**永不在她那一轮里抢 CPU**;欠账过期才插一脚(见 params)。
+_memory: dict[str, MemoryCache] = {}
+_memory_lock = threading.Lock()
+_index_cache: dict[str, tuple] = {}     # sid -> ((行数, 欠账数), MemoryIndex)
+_embedder_box: dict = {"tried": False, "emb": None}
+
+
+def _embedder():
+    """进程唯一那份嵌入器。拿不到就返回 None(= 检索退化成纯关键词,不抛)。"""
+    if not _embedder_box["tried"]:
+        _embedder_box["tried"] = True
+        _embedder_box["emb"] = embed_mod.get_embedder()
+        if _embedder_box["emb"] is None:
+            print("[memory] 没有 torch/transformers —— 记忆检索退化成只有关键词")
+    return _embedder_box["emb"]
+
+
+def memory_cache(session_id: str) -> MemoryCache:
+    """拿一张卡的索引缓存(第一次会建表 + 起后台线程)。
+
+    ⚠️ 建表是**毫秒级**的(core/memory_cache.py 实测 18.4 ms),所以放在这里
+       同步做没问题;真正贵的那 4.18 秒(暖机)在后台线程里。
+    """
+    with _memory_lock:
+        c = _memory.get(session_id)
+        if c is None:
+            c = MemoryCache.for_session(MEMORY_DIR, session_id, embedder=_embedder(),
+                                        guard=_lock, poll=MEMORY_POLL_SEC,
+                                        max_wait=MEMORY_DEBT_MAX_WAIT_SEC)
+            c.ensure()
+            c.start()
+            _memory[session_id] = c
+        return c
+
+
+def memory_sync(session_id: str) -> None:
+    """把**盘上那份日志**派生成记忆行,同步进缓存(新增/删改都要调)。
+
+    没走 turn 队列的改动(UI 删消息 / PATCH 正文)必须在 api 层显式调它 ——
+    否则缓存会继续把**她已经删掉的话**翻出来念给她听。
+    """
+    if _store is None:
+        return
+    log = _store.load_log(session_id)
+    rows = rows_from_events(log.events, strip_prefix=personas_mod.LIFE_EVENT_PREFIX)
+    memory_cache(session_id).sync(rows)
+    _index_cache.pop(session_id, None)   # 行变了 → 索引下次现建
+
+
+def memory_forget(session_id: str) -> bool:
+    """卡片被删/归档 → 它的缓存也跟着走(残骸里是她和那个角色的全部对话)。
+
+    ⚠️ 已经建过的不走 `memory_cache()`:那会**先把缓存建出来**再删 ——
+       白起一个后台线程、白写一个 sqlite 文件。
+    """
+    with _memory_lock:
+        c = _memory.pop(session_id, None)
+    _index_cache.pop(session_id, None)
+    if c is not None:
+        return c.prune_file()
+    p = MemoryCache.path_for(MEMORY_DIR, session_id)
+    if p.exists():
+        p.unlink()
+        return True
+    return False
+
+
+def recall_index() -> MemoryIndex | None:
+    """**现在这张卡**的记忆索引(`recall` 工具的注入点)。
+
+    "现在这张卡" = 正在跑的那一轮的卡,由 turn worker 设(`_recall_sid`)。
+    ⚠️ **不能**用 `life_session_id()` 代替:它算的是"最近有人聊过的卡",而
+       "刚换到一张新卡、说的第一句"那一刻,新卡的日志在盘上还没有真人消息
+       (`_has_user_talk` 为假),它会指回**上一张卡** —— 正好错在最常见的那一步。
+    """
+    sid = _recall_sid["sid"]
+    if sid is None or _store is None:
+        return None
+    cache = memory_cache(sid)
+    rev = cache.counts()                       # (行数, 已补向量数)
+    rev = (rev["total"], rev["total"] - rev["pending"])
+    ent = _index_cache.get(sid)
+    if ent is not None and ent[0] == rev:
+        return ent[1]
+    rows, vecs = cache.load()
+    idx = MemoryIndex(rows, cache.embedder, vecs=vecs)
+    _index_cache[sid] = (rev, idx)
+    return idx
+
+
+_tools.register(make_recall_tool(recall_index))
+
 _store: SessionStore | None = None
 _loop: AgentLoop | None = None
+# "现在正在跑哪张卡" —— turn worker 每项设一次,recall 工具现取(见 recall_index)。
+# 用可变 dict 而不是 global:工具闭包抓到的是这个盒子,赋新值不用重绑名字。
+_recall_sid: dict[str, str | None] = {"sid": None}
 _heartbeat: Heartbeat | None = None
 _life_gate: "ServerGate | None" = None  # 补写/心跳跑完也 mark_self,节奏衔接
 # 回放轮世界时钟:补写轮跑之前设为 slot 起点,backfill_composer 的 world section
@@ -230,14 +348,30 @@ _turn_busy = threading.Event()   # worker 此刻正在跑一项
 
 def _turn_worker_loop() -> None:
     while True:
-        _prio, _seq, job, box, done = _turn_queue.get()
+        _prio, _seq, job, box, done, sid = _turn_queue.get()
         _turn_busy.set()
+        # "现在这张卡"只在**这一项**的运行期内有效。三个来源(聊天/自走/补写)
+        # 都从 _submit_turn 进来,所以这里是唯一要设的地方 —— 少设一处,
+        # recall 会翻错卡(而且是静默的:她有记忆,只是**别人的**)。
+        prev_sid = _recall_sid["sid"]
+        _recall_sid["sid"] = sid
         try:
             with _lock:
                 box["result"] = job()
+                # 这一轮把日志写完了 → 把新行同步进索引缓存(喂给后台补向量)。
+                # ⚠️ 必须在**锁内**:`_store.load_log` 有一条被 test_log_transaction
+                #    测住的不变量 —— 它只许在锁内被调用(加载→改→存盘是一段)。
+                #    这里虽然只是只读,但放宽那条不变量得用户点头才算数。
+                #    自己的 try:索引坏了不该让**她这一轮**失败。
+                if sid is not None:
+                    try:
+                        memory_sync(sid)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[memory] 同步索引缓存失败({sid}): {exc}")
         except Exception as exc:  # noqa: BLE001  原位重抛给提交方
             box["exc"] = exc
         finally:
+            _recall_sid["sid"] = prev_sid
             _turn_busy.clear()
             done.set()
 
@@ -253,17 +387,20 @@ def _ensure_turn_worker() -> None:
             _turn_worker.start()
 
 
-def _submit_turn(job, *, priority: int = _QUEUE_SELF, on_wait=None):
+def _submit_turn(job, *, priority: int = _QUEUE_SELF, on_wait=None,
+                 sid: str | None = None):
     """把一次 turn 塞进队列并**等它跑完**;返回 job 的返回值。
 
     job 在 worker 线程里、**持 _lock** 执行 —— 所以 job 内部不要再碰 _lock。
     job 抛异常则在这里原位重抛,由调用方决定怎么呈现。
     on_wait:排队期间每 ~0.5s 回调一次(打印台"…排队中 Xs"现场用)。
+    sid:这一项是**哪张卡**的。给 recall 用,也给"跑完同步索引缓存"用。
+         三个来源都从这里进,所以传对了就全对。
     """
     _ensure_turn_worker()
     done = threading.Event()
     box: dict = {}
-    _turn_queue.put((priority, next(_turn_seq), job, box, done))
+    _turn_queue.put((priority, next(_turn_seq), job, box, done, sid))
     while not done.wait(0.5):
         if on_wait is not None:
             on_wait()
@@ -561,7 +698,7 @@ class LifeLoop:
                     end_self_wake()
 
         try:
-            result = _submit_turn(_job, priority=_QUEUE_SELF)
+            result = _submit_turn(_job, priority=_QUEUE_SELF, sid=sid)
             if result is not None:
                 _live(f"{tag}完成,耗时 {time.time() - t0:.1f}s")
             return result
@@ -1013,7 +1150,7 @@ def _maybe_backfill_life() -> None:
             with _pending_backfill_lock:
                 _pending_backfill.add(sid)
             try:
-                _submit_turn(lambda s=sid: _card_job(s), priority=_QUEUE_SELF)
+                _submit_turn(lambda s=sid: _card_job(s), priority=_QUEUE_SELF, sid=sid)
             except Exception as exc:  # noqa: BLE001
                 print(f"[backfill] 卡片 {sid} 补写失败: {exc}")
             finally:
@@ -1142,6 +1279,17 @@ def start() -> None:
 
 
 def stop() -> None:
-    """服务停止:停心跳(线程 daemon,主要是收尾干净)。"""
+    """服务停止:停心跳与记忆索引后台线程(都是 daemon,主要是收尾干净)。"""
     if _heartbeat is not None:
         _heartbeat.stop()
+    with _memory_lock:
+        caches = list(_memory.values())
+        _memory.clear()
+    _index_cache.clear()
+    for c in caches:
+        try:
+            # close 而不是 stop:stop 只停线程,sqlite 连接还开着 ——
+            # 在 Windows 上那等于**文件被占住**(删不掉、也搬不走)。
+            c.close()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[memory] 关索引缓存失败: {exc}")

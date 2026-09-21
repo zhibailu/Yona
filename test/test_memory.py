@@ -13,9 +13,14 @@ from core.session_log import SessionLog  # noqa: E402
 
 
 class Ev:
-    """最小事件壳(内核不挑来源,只要有 type/data/time)。"""
+    """最小事件壳(内核不挑来源,只要有 type/data/time/seq)。"""
 
-    def __init__(self, type_, data, t=0.0):
+    _next = [0]
+
+    def __init__(self, type_, data, t=0.0, seq=None):
+        # seq 自动连号:`surface/shadow` 是按 **seq 区间**遮蔽的,所以内核要读它
+        self.seq = Ev._next[0] if seq is None else seq
+        Ev._next[0] = self.seq + 1
         self.type, self.data, self.time = type_, data, t
 
 
@@ -177,6 +182,31 @@ def test_no_embedder_degrades_to_sparse_only():
     assert hits[0].score > 0.0
 
 
+def test_shadowed_messages_never_become_memory_rows():
+    """用户删掉的话**不许**进记忆 —— 日志原文留着,投影必须跳过。
+
+    删除走的是 `log.shadow()`(`server/store.py:345`):原文一个字不动,
+    只追加一条 `surface/shadow` 注解。不跳过的后果不是"多一条结果",
+    而是**把她删掉的话翻出来念给他听**。
+    """
+    Ev._next[0] = 0          # 遮蔽按 seq 区间,所以 seq 要可预期
+    ev = _user_turn(1, "我们分手吧", "……好。", 100.0, 101.0)
+    ev += [Ev("surface/shadow", {"start": 0, "end": 999, "reason": "user-delete-from"}, 200.0)]
+    rows = rows_from_events(ev)
+    assert rows == [], f"删掉的话还在记忆里: {rows}"
+
+
+def test_shadow_only_hides_what_it_covers():
+    """对照组:遮蔽范围之外的轮次不受影响(否则一删全没了)。"""
+    Ev._next[0] = 0
+    ev = _user_turn(1, "第一轮", "回答一", 100.0, 101.0)      # seq 0..3
+    ev += _user_turn(2, "第二轮", "回答二", 200.0, 201.0)     # seq 4..7
+    ev += [Ev("surface/shadow", {"start": 0, "end": 3}, 300.0)]
+    rows = rows_from_events(ev)
+    assert [r.turn for r in rows] == [2], rows
+    assert rows[0].text == "第二轮\n回答二"
+
+
 def test_empty_index_returns_nothing():
     idx = MemoryIndex([], None)
     assert idx.search("随便") == []
@@ -190,6 +220,8 @@ def run_all():
         test_talk_keeps_a_half_when_one_side_is_missing,
         test_rows_strip_copied_prefix_on_read,
         test_rows_ignore_non_turn_events,
+        test_shadowed_messages_never_become_memory_rows,
+        test_shadow_only_hides_what_it_covers,
         test_bm25_prefers_exact_terms,
         test_scope_and_turn_are_routing_never_scoring,
         test_limit_floor_is_one,

@@ -138,6 +138,8 @@ async def chat_stream(request: Request, body: ChatRequest):
                 _job,
                 priority=engine.user_turn_priority(sid),
                 on_wait=_on_wait,
+                # 这一轮是**哪张卡** —— recall 靠它翻对卡(不传 = 翻不到记忆)
+                sid=sid,
             )
             if time.time() - t_wait0 > 0.5:
                 engine._live(f"拿到引擎,排队共 {time.time() - t_wait0:.1f}s,开始回复")

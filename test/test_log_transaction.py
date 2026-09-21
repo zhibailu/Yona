@@ -21,12 +21,19 @@
 """
 
 import asyncio
+import os
 import sys
 import tempfile
 import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# ⚠️ 记忆索引缓存指到临时目录(必须在 import engine **之前**)。
+#    本文件会跑真实的 turn 队列,而 turn worker 每跑完一项就同步一次索引缓存 ——
+#    不指走的话,跑测试会在**仓库里**留下 cache/sessions/*.sqlite3。
+#    规矩出处:测试不许要求仓库为它让路,临时产物写系统 temp。
+os.environ["YONA_CACHE_DIR"] = tempfile.mkdtemp(prefix="yona-test-cache-")
 
 from core.session_log import SessionLog        # noqa: E402
 from server.store import SessionStore          # noqa: E402

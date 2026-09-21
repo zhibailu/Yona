@@ -76,11 +76,31 @@ def _blocks_text(content: Any) -> str:
 def _turns(events: Iterable[Any]) -> list[dict]:
     """按轮归拢:每轮的 source / 真人消息 / 她的消息(与投影层同款口径)。
 
+    ## surface 遮蔽必须跳(2026-09-21 实测踩到)
+
+    用户在 UI 上删消息走的是 `log.shadow()`(`server/store.py:345`)——
+    **日志原文一律留着**(日志即真相),只追加一条 `surface/shadow` 注解,
+    由投影层跳过。所以这里也必须跳,否则后果不是"多一条结果",
+    而是**把她删掉的话翻出来念给他听**。
+
+    ⚠️ 遮蔽集合**从这批事件自己算**,不靠调用方传 —— 传参就会有人忘,
+       而忘了的后果是静默的(记忆看着好好的)。
+    编辑走的是同一条路:`update_message_content` = 遮蔽原文 + 追加修正消息,
+    所以跳过原文之后,`_turns` 的"后者覆盖前者"自然取到修正后的正文。
+
     ⚠️ `assistant/message` 不带 source —— 靠**轮号**归属(与 core/session_log
     的 `self_turns` 同一个判据)。
     """
+    evs = list(events)
+    hidden: set[int] = set()
+    for e in evs:
+        if e.type == "surface/shadow":
+            hidden.update(range(e.data["start"], e.data["end"] + 1))
+
     acc: dict[int, dict] = {}
-    for e in events:
+    for e in evs:
+        if e.seq in hidden:
+            continue
         t = e.data.get("turn")
         if not isinstance(t, int):
             continue
@@ -177,7 +197,13 @@ class BM25:
 
 
 def _dot(a: Any, b: Any) -> float:
-    """点积:兼容 list(稠密)与 dict(稀疏 bigram 占位 embedder)。"""
+    """点积:兼容 list(稠密)与 dict(稀疏 bigram 占位 embedder)。
+
+    `None` = "这条还没向量"(缓存里 `vec IS NULL`,见 core/memory_cache.py)——
+    算 0,不代表不相关,只代表**还不知道**。
+    """
+    if a is None or b is None:
+        return 0.0
     if isinstance(a, dict) or isinstance(b, dict):
         if not isinstance(a, dict) or not isinstance(b, dict):
             return 0.0
@@ -206,16 +232,34 @@ class MemoryIndex:
               `.passage` 拿不到时索引仍然建得起来,只是没有语义路。
     """
 
-    def __init__(self, rows: Sequence[MemoryRow], embedder: Any = None) -> None:
+    def __init__(self, rows: Sequence[MemoryRow], embedder: Any = None,
+                 vecs: Sequence[Any] | None = None) -> None:
+        """
+        vecs: 预计算好的向量,与 `rows` **按下标对齐**(`core/memory_cache.py`
+              从 sqlite 读回来的那份)。给了就不再重算 —— 这是缓存唯一的意义,
+              实测 BGE 逐条 44.7 ms,315 条重算一次 14 秒。
+              个别位置给 `None` = 那条还没补上,就地现算(有 embedder 的话)。
+        """
         self.rows = list(rows)
-        self._vecs: list[Any] = []
         self.embedder = embedder
-        if embedder is not None:
-            for r in self.rows:
-                self._vecs.append(embedder.passage(r.text))
+        self._vecs: list[Any] = []
+        for i, r in enumerate(self.rows):
+            v = vecs[i] if vecs is not None and i < len(vecs) else None
+            if v is None and embedder is not None:
+                v = embedder.passage(r.text)
+            self._vecs.append(v)
         self._bm = BM25([r.text for r in self.rows])
 
     # ---------- 检索 ----------
+    @property
+    def has_semantic_route(self) -> bool:
+        """语义路可用吗(有嵌入器 **且** 至少有一条向量)。
+
+        给工具判"语义路塌了没"用 —— 塌了就退时间序并老实说 degraded,
+        而不是**悄无声息地只剩关键词**(那样她只会觉得"她记性变差")。
+        """
+        return self.embedder is not None and any(v is not None for v in self._vecs)
+
     def search(
         self,
         query: str,

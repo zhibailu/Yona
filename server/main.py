@@ -204,6 +204,9 @@ async def update_session_settings(session_id: str, body: SessionSettingsIn):
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     engine._store.delete_session(session_id)
+    # 卡片走了,它的记忆索引缓存也该走 —— 缓存里是她和那个角色的全部对话。
+    # 不删的后果不是"占点磁盘",是**归档卡的对话继续留在盘上**。
+    engine.memory_forget(session_id)
     return {"ok": True}
 
 
@@ -218,6 +221,9 @@ async def delete_messages_from(from_id: int, session_id: str | None = None):
         raise HTTPException(status_code=404, detail="Session not found")
     with engine._lock:
         deleted = engine._store.delete_messages_from(session_id, from_id)
+    # 日志被截断了 → 缓存必须跟着删,否则她会把**用户已经删掉的话**
+    # 继续翻出来念给他听(实测过最坏的那种:用户删了,她还记得)
+    engine.memory_sync(session_id)
     return {
         "deleted": True,
         "session_id": session_id,
@@ -242,6 +248,8 @@ async def update_message(msg_id: int, body: MessageUpdate):
                     s["id"], msg_id, body.content
                 )
             if ok:
+                # 正文改了 → 那条的旧向量作废(否则按旧内容排新内容的名次)
+                engine.memory_sync(s["id"])
                 return {"updated": True, "session_id": s["id"]}
     raise HTTPException(status_code=404, detail="Message not found")
 
