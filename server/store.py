@@ -409,6 +409,28 @@ class SessionStore:
         p.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     def touch_session(self, session_id: str) -> None:
+        """把这张卡的 `updated_at` 推进到当前时刻。
+
+        ⏸ **占位:产品零调用(2026-09-22 清理时如实标注,不拆不删)。**
+
+        ① 现状:`grep` 全仓 —— 调用点**一个都没有**。唯一曾经调它的地方是
+           `server/app/api/chat.py`,而那里现在**自己写 meta**(理由写在那儿:
+           `touch_session` 做的是"读一遍 meta 再整体写回",与它前后那笔写盘
+           **重复读+重复写**),所以那处已删。
+        ② 为什么留着:它是 `updated_at` 的**唯一语义出口** —— `updated_at` 是
+           产品行为(自走目标 `life_target()` 与补写顺序 `life_backfill_order()`
+           都按它排序,分钟精度)。将来任何"会话被碰过就该刷新时间"的新入口,
+           都该用它,而不是各自再写一遍 `_read_meta` + `_write_meta`
+           (那正是它当初长出来的原因)。
+        ③ 什么时候动:如果再没有任何调用点,而 `updated_at` 的写法已在别处
+           稳定成一条(`chat.py` 与 `set_session_settings` 都在自己写),
+           就可以删 —— 但**删之前先把 `updated_at` 的写入收口到一处**,
+           否则会把"两个地方各写一半"变成"三个地方"。
+        ④ 将来手术要删哪几行:本注释块 + 下面 `touch_session` 整个函数
+           (签名 + 4 行函数体);连带看 `test/test_recall_wiring.py` 里那条
+           注释("直接改 meta 而不是 `touch_session()`" —— 它解释了为什么
+           探针不调它,删函数时把这句话也一起改掉)。
+        """
         meta = self._read_meta(session_id)
         if meta is not None:
             meta["updated_at"] = _now_iso()
