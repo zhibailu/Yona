@@ -207,6 +207,61 @@ def test_deleted_all_messages_kills_the_card_as_life_target():
     assert kept in store.life_backfill_order()
 
 
+def test_emptied_session_log_gets_archived_and_card_stays():
+    """清空消息 → **整段日志归档**,而**卡还在**(2026-09-22 11:20 用户拍板:"2 要")。
+
+    用户口径:「如果是说当前会话 0 消息了的话,**应该是整个对应日志归档**,
+    会被补写等过滤掉,当然**不继续补东西,就是死掉了**。」
+
+    钉三件事,每一件都是一条"踩过就疼"的边界:
+      ① 空了才搬,还有可见消息时**不搬**(护栏在 `archive_log()` 里,不靠调用方自觉);
+      ② 只搬 `chat.log`,**`meta.json` 留着** —— 卡不能被搬走。原因见 `archive_log()`
+         docstring:UI 的"重新生成/重试"走的是**同一个**删除端点、删完立刻重发,
+         整卡搬走会让重发落进一个**没有 meta.json 的目录** → 会话从侧边栏消失
+         而聊天还在往里写(`list_sessions()` 按 `*/meta.json` 枚举);
+      ③ 幂等:再调一次返回 None、不抛(端点可能因并发/重复请求再调)。
+    """
+    store = SessionStore(Path(tempfile.mkdtemp()))
+    kept = store.create_session("还有消息")
+    wiped = store.create_session("聊过但被清空")
+
+    for sid in (kept, wiped):
+        log = store.load_log(sid)
+        log.append("user/message", content=[{"type": "text", "text": "在吗"}],
+                   source="user", turn=1)
+        store.save_log(sid, log)
+
+    # ① 护栏:还有可见消息 → 不搬
+    assert store.archive_log(kept) is None, "还有消息的卡不该被归档"
+    assert store._log_path(kept).exists(), "不该动它的 chat.log"
+
+    # 全删光 → 判据为假、日志原文仍在(删除只加 shadow 注解)
+    store.delete_messages_from(wiped, 0)
+    assert not store._has_user_talk(wiped)
+    assert store._log_path(wiped).exists(), "shadow 不删原文"
+
+    # ② 归档:只搬 chat.log,meta.json 留在原位
+    dest = store.archive_log(wiped)
+    assert dest is not None, "空了的卡该被归档"
+    assert (Path(dest) / "chat.log").exists(), "归档里应有 chat.log"
+    assert not store._log_path(wiped).exists(), "活路径上的 chat.log 该没了"
+    assert store.get_session(wiped) is not None, "卡必须还在(meta.json 不能搬走)"
+    assert wiped in [s["id"] for s in store.list_sessions()], "卡还应在会话列表里"
+    assert store.get_session(wiped)["messages"] == [], "它是个空卡"
+
+    # ③ 幂等
+    assert store.archive_log(wiped) is None, "再归档一次应安全返回 None"
+
+    # 归档完还能重新开始(重发一条),且落在**这张卡自己的目录**里 ——
+    # 这就是"只搬日志不搬卡"换来的好处
+    log = store.load_log(wiped)
+    log.append("user/message", content=[{"type": "text", "text": "重新开始"}],
+               source="user", turn=1)
+    store.save_log(wiped, log)
+    assert store._log_path(wiped).parent == store._sid_dir(wiped)
+    assert store._has_user_talk(wiped)
+
+
 if __name__ == "__main__":
     test_message_view_projection()
     test_delete_from_is_tail_cut_shadow()
@@ -217,4 +272,5 @@ if __name__ == "__main__":
     test_created_at_no_seconds_for_ui_slice()
     test_life_backfill_order_is_shortest_gap_first()
     test_deleted_all_messages_kills_the_card_as_life_target()
+    test_emptied_session_log_gets_archived_and_card_stays()
     print("server/store all tests passed")

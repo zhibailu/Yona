@@ -285,6 +285,53 @@ class SessionStore:
         out.sort(reverse=True)
         return [sid for _ts, sid in out]
 
+    def archive_log(self, session_id: str) -> str | None:
+        """把这张卡的**主日志**搬进 `archive/`(它上面已经一条可见消息都没有了)。
+
+        2026-09-22 11:20 用户拍板(口径原话):
+        「如果是说当前会话 0 消息了的话,**应该是整个对应日志归档**,会被补写等过滤掉,
+          当然不继续补东西,就是死掉了。」用户随后确认:"2 要"。
+
+        ⚠️ **只搬日志,不搬卡**(与 `delete_session()` 的"整袋归档"区分开,别混):
+        用户说的是「当前会话 **0 消息**了」—— 这句话本身就假设**会话还在**,
+        只是里面的消息没了。所以这里做的是:把 `sessions/<sid>/chat.log` 移走,
+        **留下 meta.json / images / subruns** —— 卡还在列表上(是个空卡),
+        但那段对话**真的离开了活路径**(不是只被打上 shadow 注解)。
+
+        为什么不做成"整袋归档"(把整个卡也搬走)—— 两条都是实测出来的坑:
+          ① UI 上"重新生成 / 重试"走的是**同一个** `DELETE /messages/from/{id}`
+             (static/app-messages.js 的 `regenerateMessage` / `retryMessage`:
+             先删掉那条用户消息再重发)。如果删到第一条就把**整卡**搬走,
+             紧接着的重发会写进一个**没有 meta.json 的目录** ——
+             而 `list_sessions()` 是按 `*/meta.json` 枚举的,结果是
+             会话**从侧边栏消失、聊天还在往里写**。这属于静默的数据错位。
+          ② 用户的原话是"日志归档",不是"卡归档";卡归档本来就有别的入口
+             (`DELETE /sessions/{id}` = `delete_session()`)。
+
+        与 `_has_user_talk()` 的分工(两条一起才凑成"死掉"):
+          · `_has_user_talk()` 判据 → 卡退出自走目标 / 补写名单(**不继续补东西**);
+          · 本函数 → 内容离开活路径(**归档**);
+          · 所以"死"是这两条合起来的结果,不是任何单独一条。
+
+        幂等 + **自带护栏**:没有 `chat.log`(已被归档过)时返回 None、不抛异常 ——
+        调用方(`server/main.py` 的删除端点)可能因为并发/重复请求再调一次。
+        ⚠️ **还有可见消息时也返回 None(什么都不做)** —— 这个方法的名字就是
+        "日志空了才归档",把一张**还有对话的卡**的日志搬走是数据事故,不该靠调用方
+        自觉。护栏放在这里,是因为这里是唯一能一眼看出"该不该搬"的地方
+        (`_messages_view()` 就是判据本身)。真要在还有消息时归档,
+        那是别的语义了,请显式用 `delete_session()`(整袋归档)或另写方法。
+        """
+        if self._messages_view(session_id):
+            return None  # 还有可见消息 → 不搬(见上面那条护栏)
+        p = self._log_path(session_id)
+        if not p.exists():
+            return None
+        ts = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+        dest = self.archive_dir / f"{ts}-{session_id}"
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(p), str(dest / "chat.log"))
+        return str(dest)
+
     def delete_session(self, session_id: str) -> str | None:
         """删卡 = 归档整袋(archive/<ts>-<sid>/),再清当前位。
 

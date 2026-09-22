@@ -194,7 +194,7 @@ Vision: observability first, not the front-end. You can watch the agent "think" 
   > ⛔ 【2026-09-22 10:45 更正】上面这条把 life-events 当成对外观测面在写,**这层分量是擅自加的** ——
   > 该面板的接法与投影全是 baseline(`2903b2a`)搬来的旧 UI 配套,不是 rewrite 设计出来的产品面。
   > **用户 2026-09-22 10:45 判定内心活动(life-events)与桌面(workspace)两个面板不留**,
-  > 现状**标注待砍、不摘**(本次判定只点名这两个面板)。详见 `server/app/api/view.py` 的模块头。
+  > 现状:**已摘除**(2026-09-22 11:20,用户「3 摘掉吧那就」)。详见 `server/app/api/view.py` 的模块头。
 - **llm-log panel (admin)**: every real LLM call's input/output/token usage, ring buffer + live SSE. All real calls go through one choke point (`_TracingLLM` wrapper); no scattered instrumentation.
 - Tool calls are fully traced in the event log; projection can fold them (tool trace = view, not log).
 

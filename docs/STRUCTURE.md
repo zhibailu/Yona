@@ -88,12 +88,13 @@ yona-rewrite/
   收子包要留 facade 反而绕)。每个模块文件头有"学习对照"注释
   (chat.py 详解转发/缓冲:线程→asyncio.Queue→async 转发、busy 排队)。
   main.py 底部保留兼容再导出(旧测试/探针 import server.main 取符号,逻辑
-  在 engine —— 已移除 facade(2026-09),测试直达 engine)。32 端点契约零变化
-  (2026-09-21 实测),23 个测试全绿(2026-09-21 实测;测试数以实际跑
+  在 engine —— 已移除 facade(2026-09),测试直达 engine)。**端点契约零变化**
+  (2026-09-21 实测 32 个;**2026-09-22 摘掉 `/workspace` 与 `/admin/life-events` 后为 30 个**
+  —— `api/view.py` 少 2,端点数以代码为准),23 个测试全绿(2026-09-21 实测;测试数以实际跑
   test/test_*.py 为准)+ 真服务冒烟过。
   **用户口径**:先做一版供学习,学完 FastAPI 转发/缓冲再回来优化。
 
-> 【2026-09-21 23:20 更正】行数 / 端点数 / 测试数一律以代码为准(2026-09-21 实测 **309 行 / 32 端点**)—— `server/main.py` 实测 309 行;端点实测 32 个(`main.py` 13 + `api/config.py` 7 + `api/media.py` 5 + `api/view.py` 6 + `api/chat.py` 1);测试实测 23 个 `test/test_*.py`。下文 §5「服务:24 端点」同此更正。
+> 【2026-09-21 23:20 更正】行数 / 端点数 / 测试数一律以代码为准(2026-09-21 实测 **309 行 / 32 端点**;⚠️ **端点数 2026-09-22 变成 30** —— `api/view.py` 摘掉了 `/workspace` 与 `/admin/life-events`,实测以代码为准)—— `server/main.py` 实测 309 行;端点实测 32 个(`main.py` 13 + `api/config.py` 7 + `api/media.py` 5 + `api/view.py` 6 + `api/chat.py` 1);测试实测 23 个 `test/test_*.py`。下文 §5「服务:24 端点」同此更正。
 
 **心跳节奏参数(2026-09,gate.py 方案② —— 与补写同一原语)**:
 - 概率形状继承 `rhythm.DEFAULT_SHAPE`(拍板曲线:深夜=0、晚间高):
@@ -121,7 +122,9 @@ yona-rewrite/
 > 不是 rewrite 设计出来的产品面。我上一轮拿 `8138640` 的"内心跟随当前卡"当证据,
 > 说"用户操刀过这个面板"是**过度解读** —— 那一条改的是**目标卡选择**
 > (自走/补写打哪张卡,那条确实是她拍的),不是"要不要有这个面板"。
-> → 现状**标注为"不留/待砍"**(与 `/autonomy/pulse` 同款,不摘),详见
+> → 现状:**已摘除**(2026-09-22 11:20,用户「3 摘掉吧那就」)—— 不是「只标注」:
+> 两个 pane、两个端点、`_refreshInnerLife()` 都删了,`app-objects-sensory.js` 移进
+> `static/_unused/`。详见
 > `server/app/api/view.py` 的模块头。下表对应单元格已就地改正。
 
 旧 UI 9 文件原样拷入,但**文件名与功能不对应** —— 剔除空壳页面不能整文件删:
@@ -131,8 +134,8 @@ yona-rewrite/
 | app-core.js | 主聊天逻辑、设置(真接线)、会话切换、连接管理(模型下拉/向导) | — |
 | app-messages.js | 消息渲染 + busy 帧提示(已加 rewrite 分支) | — |
 | app-sessions.js | 会话管理(真) | — |
-| app-presets.js | **预设 CRUD(真产品功能,2026-09 真存盘)** | ⛔ **内心活动面板 = 不留(见上)**:`_refreshInnerLife()` 那段接的是 baseline 旧面板,用户未操刀、待砍。预设已作用于运行时:应用预设 = 复制进会话快照(`{sid}.meta.json` 的 `settings`),当轮 > 快照 > 默认三层合并;权威见 DESIGN §12 + TIMELINE 任务 6(2026-09-17 更正:旧文写"尚未作用,等快照整合",该整合已落) |
-| app-objects-sensory.js | —(**三段没有一段算活的产品面**) | ⛔ **桌面/行动舞台 = 不留(见上)**:`/workspace` 动作轨迹 + 脉冲 + 内心面板,全是 baseline 旧配套。感官(发图/语音/朗读)+物件舞台:后端无端点/恒空,UI 入口已撤(2026-09 任务4/5),代码尸体标注冻结区,感官接回时复用 |
+| app-presets.js | **预设 CRUD(真产品功能,2026-09 真存盘)** | ⛔ **内心活动面板 = 已摘除(见上,2026-09-22 11:20)**:`_refreshInnerLife()` 与 60s 定时器已删,`#inner-life` pane 与后端 `GET /admin/life-events` 同去。预设已作用于运行时:应用预设 = 复制进会话快照(`{sid}.meta.json` 的 `settings`),当轮 > 快照 > 默认三层合并;权威见 DESIGN §12 + TIMELINE 任务 6(2026-09-17 更正:旧文写"尚未作用,等快照整合",该整合已落) |
+| `_unused/app-objects-sensory.js` | —(**三段没有一段算活的产品面**;2026-09-22 11:20 从 `static/` **移入 `static/_unused/`**,`index.html` 不再加载它) | ⛔ **桌面/行动舞台 = 已摘除(见上)**:`/workspace` 动作轨迹 + 脉冲 + 内心面板全去,后端那两个端点也删了。感官(发图/语音/朗读)+物件舞台:后端无端点/恒空,UI 入口早在 2026-09 任务4/5 撤,代码尸体现在锁在 `_unused/` 里,感官接回时从那取 |
 | app-media-debug.js | **LLM 输入输出调试(已接真日志:engine._TracingLLM 环形缓冲,折叠不空轮询;2026-09 起每调用带 token 用量与截断标记)**;**背景图/头像存取 + 拖拽选位(真接线)** | — |
 | app-admin.js | — | 已剪:stats/rebuild-vector/export/clean-empty 四按钮 404,移 `static/_unused/` |
 
@@ -180,7 +183,7 @@ core/loop.py run_turn model 字段);「连接/更换模型」按钮 = 首启向�
 - 生命周期:Heartbeat 闸门(纯规则)+ LifeLoop 自走轮(source=self)
 - **离线生活补写**(核心算法):rate = K×shape 连续概率判定,收编主 loop,
   无第二 AgentLoop —— 详见 `docs/protocols/LIFE_BACKFILL.md`
-- 服务:32 端点(2026-09-21 实测;行数 / 端点数以代码为准)/ SSE 流式(asyncio.Queue)/ busy 帧 / workspace+life-events 观测(**⚠️ 这两个观测面板 2026-09-22 被用户判为"不留",见本文件 §4 顶部的更正框**)
+- 服务:**30 端点**(2026-09-21 实测 32 → 2026-09-22 摘掉 `/workspace` 与 `/admin/life-events` 两个观测面板端点;行数 / 端点数**一律以代码为准**)/ SSE 流式(asyncio.Queue)/ busy 帧 / **观测面板已撤**(见本文件 §4 顶部的更正框)
 - 数据:每卡一套 life(2026-09 拍板)—— 生活流写卡**自己**的
   `chat.log(source=self)`,不再有匿名全局 `_life.log`;存储 = 会话目录制
   `sessions/<sid>/{chat.log, meta.json, images/}`。

@@ -39,12 +39,11 @@
                 localStorage.setItem('yona_session_id', currentSessionId);
                 document.getElementById('messages').innerHTML = '';
                 document.getElementById('current-title').textContent = data.title;
-                _setFeedHeading(data.title || '内心');
+                // (2026-09-22 11:20 删:_setFeedHeading(...) + 两处 _refreshInnerLife /
+                //  _refreshWorkspace 的"面板即时复位" —— 那两个左栏 pane 已摘除,
+                //  函数与它们所在的脚本都不在了。)
                 // 新会话 = 无快照 = 回旗舰/全局默认
                 if (typeof _applySessionSettings === 'function') _applySessionSettings({});
-                // 新卡面板即时复位(不留上一卡残留;2026-09 切卡跟随修正)
-                if (typeof _refreshInnerLife === 'function') _refreshInnerLife();
-                if (typeof _refreshWorkspace === 'function') _refreshWorkspace();
                 await loadSessions();
                 setStatus('新会话已创建');
             } catch (e) {
@@ -70,7 +69,7 @@
                 }
                 const data = await res.json();
                 document.getElementById('current-title').textContent = data.title || '未命名';
-                _setFeedHeading(data.title || '内心');
+                // (2026-09-22 11:20 删:_setFeedHeading(...) —— 左栏那两个 pane 已摘除。)
                 (data.messages || []).forEach(m => {
                     appendMessage(m.role, m.content, m.id, m.sensory || null);
                 });
@@ -80,11 +79,10 @@
                 }
                 // 加载该会话绑定的图片配置
                 await _loadSessionImages();
-                // 左栏面板都跟当前会话(2026-09 用户指出切卡不跟着变):
-                // 切卡后即时刷新「生活事件」内心面板 + 工作区/动作轨迹,
-                // 不再等 60s/45s 定时器下个 tick 才跳对会话。
-                if (typeof _refreshInnerLife === 'function') _refreshInnerLife();
-                if (typeof _refreshWorkspace === 'function') _refreshWorkspace();
+                // (2026-09-22 11:20 删:切卡后刷「生活事件 / 工作区」两个左栏面板那两行 ——
+                //  两个 pane 已按用户拍板摘除,它们连的 60s/45s 定时器也一起没了。
+                //  原注释:「左栏面板都跟当前会话(2026-09 用户指出切卡不跟着变)」——
+                //  那条诉求针对的是已摘除的面板,现在没有需要跟随的左栏面板。)
             } catch (e) {
                 console.error('switchSession 失败 id=' + id, e);
                 showSystem('加载历史失败: ' + (e.message || String(e)));

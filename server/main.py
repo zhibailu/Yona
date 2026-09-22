@@ -13,8 +13,10 @@ thin router 拆分(2026-09,布局 B):本文件只留**路由薄壳** —— 每�
 端点族:
 - 会话:sessions CRUD(每会话一个 SessionLog,落盘 data/sessions/)
 - 聊天:POST /chat/stream(SSE 逐 token,契约:token/tool_status/busy/done)
-- 治理:DELETE /messages/from/{id}(= shadow tail-cut)、PATCH /messages/{id}(= replace)
-- 观测:GET /workspace(动作轨迹从日志派生)、GET /admin/life-events(内心活动)
+- 治理:DELETE /messages/from/{id}(= shadow tail-cut;清空后整段日志归档)、PATCH /messages/{id}(= replace)
+- 观测:GET /objects(冻结合同位,恒空)、GET /runtime/status(诊断)、GET /admin/llm-log(+ /stream)
+  (2026-09-22 11:20 删:GET /workspace 与 GET /admin/life-events —— 两个 baseline 搬来的
+   观测面板,用户判"不留"并要求摘除;理由与恢复入口见 `server/app/api/view.py` 模块头。)
 - 配置:settings/models/context-sources;预设 CRUD + 模型发现 = server/app/api/config.py
 - 杂项:images/bg-position 纯文件存取
 """
@@ -254,13 +256,33 @@ async def delete_messages_from(from_id: int, session_id: str | None = None):
         raise HTTPException(status_code=404, detail="Session not found")
     with engine._lock:
         deleted = engine._store.delete_messages_from(session_id, from_id)
-    # 日志被截断了 → 缓存必须跟着删,否则她会把**用户已经删掉的话**
-    # 继续翻出来念给他听(实测过最坏的那种:用户删了,她还记得)
-    engine.memory_sync(session_id)
+
+    # 一条可见消息都不剩了 → **整段日志归档**(2026-09-22 11:20 用户拍板:"2 要")。
+    # 用户口径:「如果是说当前会话 0 消息了的话,应该是整个对应日志归档,
+    #   会被补写等过滤掉,当然不继续补东西,就是死掉了。」
+    # ⚠️ 只搬日志、**不搬卡**(理由与那两个坑写在 store.archive_log() 的 docstring):
+    #   UI 的"重新生成/重试"走的是同一个删除端点、删完立刻重发 —— 整卡搬走会让
+    #   重发落进一个没有 meta.json 的目录,会话从侧边栏消失而聊天还在写。
+    # 与 `_has_user_talk()` 的分工:那条让卡退出自走/补写目标(不继续补东西),
+    #   这条让内容离开活路径(归档);两条合起来 = 用户说的"死掉"。
+    archived = None
+    if not session["messages"]:
+        with engine._lock:
+            archived = engine._store.archive_log(session_id)
+        # 日志走了 → 记忆索引必须跟着走:索引是从日志派生的,
+        # 留着它就是"她已经删掉的话还在她能翻到的地方"(同下面那句注释的判例)。
+        engine.memory_forget(session_id)
+    else:
+        # 日志被截断了 → 缓存必须跟着删,否则她会把**用户已经删掉的话**
+        # 继续翻出来念给他听(实测过最坏的那种:用户删了,她还记得)
+        engine.memory_sync(session_id)
     return {
         "deleted": True,
         "session_id": session_id,
         "deleted_messages": deleted,
+        # 归档路径(None = 还有可见消息,没归档)。前端 static/app-messages.js
+        # 读到它就提示"这段对话已归档"并重新拉一次会话列表。
+        "archived": archived,
         # ⚠ **占位字段,恒 0**(2026-09 清理时保留并标注):`deleted_objects` **前端在读**
         #    —— static/app-messages.js 三处
         #    `if (data.deleted_objects) showSystem(`已收走 ... 个绑定产物。`)`。

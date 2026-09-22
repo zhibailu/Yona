@@ -100,37 +100,13 @@
             document.getElementById('status-text').textContent = text;
         }
 
-        // ========== 内心活动面板 ==========
-        // ⛔ 用户判定**不留**(2026-09-22 10:45):整条接法是 baseline 搬来的旧 UI 配套,
-        //    不是 rewrite 设计的产品面;文档里说它是"rewrite 核心展示"是我擅自加的,已改。
-        //    **别当活功能看、别为它补功能。**
-        //    摘除 = 删本函数 + index.html 的 #inner-life pane + 后端 /admin/life-events
-        //    (server/app/api/view.py)。⚠️ **本文件的预设 CRUD 要留** —— 那是真产品功能。
-        async function _refreshInnerLife() {
-            try {
-                const q = currentSessionId
-                    ? `session_id=${encodeURIComponent(currentSessionId)}&limit=8`
-                    : 'limit=8';  // 没会话时服务端默认 Yona(常驻旗舰)
-                const res = await fetch(`${API}/admin/life-events?${q}`);
-                if (!res.ok) return;
-                const data = await res.json();
-                // 更新心情
-                const moodEl = document.getElementById('feed-mood');
-                if (data.mood) {
-                    moodEl.textContent = `心情 ${data.mood.mood} · 精力 ${data.mood.energy} — ${data.mood.desc}`;
-                } else {
-                    moodEl.textContent = '';
-                }
-                // 更新事件
-                const listEl = document.getElementById('feed-list');
-                if (data.events && data.events.length) {
-                    listEl.innerHTML = data.events.map(e =>
-                        `<div class="feed-item"><span class="time">${(e.created_at || '').slice(-5)}</span>${escapeHtml(e.content)}</div>`
-                    ).join('');
-                } else {
-                    listEl.innerHTML = '<div class="feed-item" style="color:var(--text-faint)">暂无活动</div>';
-                }
-            } catch(e) {}
-        }
-        setInterval(_refreshInnerLife, 60000);
-        _refreshInnerLife();
+        // ========== 内心活动面板:已摘除(2026-09-22 11:20)==========
+        // ⛔ 原来这里有个 `_refreshInnerLife()` + 60s 定时器,拉 `/admin/life-events`
+        //    填左栏那个「生活事件」pane。**已整个删掉** ——
+        //    用户拍板不留(「你之前说的动过的部分其实都是你自己写文档的时候顺手的,
+        //    并不是我真的操刀过这一盘」→ 追问后确认"摘掉吧那就")。
+        //    一并走了:后端端点 `GET /admin/life-events`(`server/app/api/view.py`)
+        //    与 `static/index.html` 的 `#inner-life` pane。
+        // ⚠️ **本文件的预设 CRUD 不受影响**(上面那些 `fetch('${API}/presets')`
+        //    是真的产品功能,别跟着删)。
+        // ⚠️ 别把它加回来;真要接回,恢复入口见 `server/app/api/view.py` 模块头。

@@ -23,7 +23,9 @@
                 }
             }
             _loadSessionImages();
-            _refreshObjects();
+            // (2026-09-22 11:20 删:_refreshObjects() —— 左栏工作区/生活事件两个 pane
+            //  已随内心活动面板一起摘除,那个函数所在的 app-objects-sensory.js
+            //  也移进了 static/_unused/。)
             // 2026-09 任务4:speak/voice 开关已撤(无后端),onload 不再读它
             setupInput();
             _watchSnapshotAutoSave();
@@ -268,9 +270,8 @@
             }
         }
 
-        function _setFeedHeading(title) {
-            // 左栏生活事件面板标题:固定叫"生活事件"(2026-09 用户拍板改标题,
-            // 不再拼"XX 的内心";跟随会话靠切卡时 _refreshInnerLife 刷新内容)。
-            const el = document.getElementById('feed-title');
-            if (el) el.textContent = '生活事件';
-        }
+        // ⛔ 2026-09-22 11:20:**已删 `_setFeedHeading()`** —— 它是左栏那个
+        //    「生活事件」pane 的标题设置器,而那个 pane 已随内心活动面板一起摘除
+        //    (用户拍板不留,要求"摘掉")。它原来的两个调用点(static/app-sessions.js
+        //    的 `createSession` / `switchSession`)也一起删了 ——
+        //    留着只会是两处"取一个不存在的元素、静默 no-op"的死调用。

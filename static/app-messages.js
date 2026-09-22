@@ -53,12 +53,12 @@
                 }
                 bubble.appendChild(actionsDiv);
             }
-            if (sensory && sensory.visual) {
-                _renderVisionInBubble(bubble, sensory.visual);
-            }
-            if (sensory && sensory.voice) {
-                _renderVoiceInBubble(bubble, sensory.voice);
-            }
+            // (2026-09-22 11:20 删两处感官附件渲染:`_renderVisionInBubble` /
+            //  `_renderVoiceInBubble` 定义在 app-objects-sensory.js,那个文件已移进
+            //  static/_unused/ 且不再加载 —— 留着调用会当场 ReferenceError。
+            //  感官本身早在 2026-09 任务4 就冻结了(没有 /sensory/* 端点),
+            //  所以 `sensory.visual/voice` 不会有值,这两段本来也走不到。
+            //  接回感官时要补回这两个调用点(清单见 _unused 文件头)。
 
             row.appendChild(avatar);
             row.appendChild(bubble);
@@ -167,7 +167,8 @@
                     });
                     if (!res.ok) throw new Error('更新失败');
                     contentDiv.textContent = newText;
-                    await _refreshObjects();
+                    // (2026-09-22 11:20 删:`await _refreshObjects()` —— 动作轨迹 pane
+                    //  已按用户拍板摘除,那个函数所在的脚本也移进了 static/_unused/。)
                 } catch (e) {
                     contentDiv.textContent = oldText;
                     showSystem('编辑失败');
@@ -189,6 +190,7 @@
             const msgId = bubble.dataset.msgId;
             if (!msgId) return;
             if (!confirm(`删除从此消息开始的所有消息？`)) return;
+            let archived = null;
             try {
                 const params = new URLSearchParams();
                 if (currentSessionId) params.set('session_id', currentSessionId);
@@ -197,13 +199,20 @@
                 if (!res.ok) throw new Error('删除失败');
                 const data = await res.json().catch(() => ({}));
                 if (data.deleted_objects) showSystem(`已收走 ${data.deleted_objects} 个绑定产物。`);
+                archived = data.archived || null;
             } catch (e) {
                 showSystem('删除失败');
                 return;
             }
+            if (archived) {
+                // 一条可见消息都不剩了 → 后端把整段日志搬进了 archive/(2026-09-22 用户拍板)。
+                // 卡还在(是个空卡),但**会话列表要重拉**(它已经退出自走/补写目标)。
+                showSystem('这段对话已归档:消息清空后整段日志已移出,她不会再来这里接着写。');
+                await loadSessions();
+                localStorage.removeItem('yona_session_id');
+            }
             if (currentSessionId) {
                 await switchSession(currentSessionId);
-                await _refreshObjects();
             }
         }
 
@@ -236,7 +245,7 @@
             } catch (e) { showSystem('删除失败'); return; }
 
             await switchSession(currentSessionId);
-            await _refreshObjects();
+            // (2026-09-22 11:20 删:_refreshObjects() —— 动作轨迹 pane 已摘除)
             await sendMessage(userText, sensory);
         }
 
@@ -260,7 +269,7 @@
             } catch (e) { showSystem('删除失败'); return; }
 
             await switchSession(currentSessionId);
-            await _refreshObjects();
+            // (2026-09-22 11:20 删:_refreshObjects() —— 动作轨迹 pane 已摘除)
             await sendMessage(userText, sensory);
         }
 
@@ -270,14 +279,12 @@
             for (const key of ['visual', 'voice']) {
                 const item = copy[key];
                 if (!item || item.data_url || !item.media_url) continue;
-                try {
-                    const response = await fetch(item.media_url);
-                    if (!response.ok) throw new Error(`媒体读取失败 (${response.status})`);
-                    item.data_url = await _blobToDataUrl(await response.blob());
-                } catch (error) {
-                    showSystem(`无法重新读取这轮的${key === 'visual' ? '图片' : '语音'}：${error.message || error}`);
-                    return false;
-                }
+                // (2026-09-22 11:20:原来这里 fetch 媒体再 `_blobToDataUrl()` 内联成
+                //  data_url。那个 helper 定义在 app-objects-sensory.js(已移进 _unused/
+                //  且不再加载),所以这条路**没有实现可用**了 —— 感官是冻结区,
+                //  正常也不会有这种待内联的附件;真遇到就老实说读不回来,别静默失败。
+                showSystem(`无法重新读取这轮的${key === 'visual' ? '图片' : '语音'}：感官能力已冻结`);
+                return false;
             }
             return copy;
         }
@@ -324,7 +331,9 @@
             if (!overrideText) input.value = '';
             input.style.height = 'auto';
             setStatus('小夜子正在思考...');
-            _setStageStatus('她接过你的话，正在判断要不要动手。', 'thinking');
+            // (2026-09-22 11:20 删:_setStageStatus(...) —— 它写在左栏工作区舞台的
+            //  #stage-status 上,那个 pane 与函数都已随面板摘除。它在**发消息主路径**上,
+            //  不移走就会每次发送都 ReferenceError。)
             const btn = document.getElementById('send-btn');
             btn.disabled = true;
 
@@ -385,10 +394,13 @@
                                     contentEl.style.opacity = '0.5';
                                 }
                             } else if (data.tool_status) {
-                                _setStageStatus(data.tool_status, 'thinking');
-                                _setStageTraceText('只读工具正在工作，外部内容不会获得操作权限。');
+                                // (2026-09-22 11:20 删:_setStageStatus + _setStageTraceText
+                                //  —— 舞台 pane 已摘除,两个函数随文件移走。这里保留分支
+                                //  本身(`tool_status` 帧仍然要**被识别**,不能落到下面的
+                                //  token 分支去当正文追加)。)
                             } else if (data.busy) {
-                                _setStageStatus(data.busy_text || '她正在忙别的事，消息已排队。', 'thinking');
+                                // (2026-09-22 11:20 删:_setStageStatus(busy_text) —— 同上。
+                                //  busy 帧同样必须在这里被吃掉。)
                             } else if (data.token) {
                                 if (firstToken) {
                                     firstToken = false;
@@ -413,10 +425,12 @@
                                     _injectMsgActions(ab, 'assistant');
                                 }
                                 lucide.createIcons();
-                                // 2026-09 任务4/5:物件舞台已删 —— done 后只刷新
-                                // 动作轨迹/内心,不再 _markObjectsPending/_watchForNewObject
-                                _setStageStatus('她说完了。', 'done');
-                                setTimeout(_refreshWorkspace, 900);
+                                // (2026-09-22 11:20 删:原来这里等 900ms 后
+                                //  `_refreshWorkspace()` 把动作轨迹/内心两栏刷一遍 ——
+                                //  那两个 pane 已按用户拍板摘除,该函数所在的
+                                //  app-objects-sensory.js 也移进了 static/_unused/。
+                                //  `_setStageStatus` 也随文件移走了 —— 它是定义在
+                                //  app-objects-sensory.js 里的,留着调用会 ReferenceError。)
                             } else if (data.error) {
                                 throw new Error(data.error);
                             }
@@ -432,7 +446,9 @@
                 setStatus(`${settings.model} · T=${settings.temperature}`);
 
             } catch (e) {
-                _cancelStreamingSpeech();
+                // (2026-09-22 11:20 删:_cancelStreamingSpeech() —— 朗读属感官冻结区,
+                //  那个函数定义在 app-objects-sensory.js(已移进 _unused/ 且不再加载)。
+                //  原来那行注释也说了「语音/感官附件钩子已撤」。)
                 hideTyping();
                 if (aiDiv && aiDiv.parentNode) aiDiv.remove();
                 const container = document.getElementById('messages');

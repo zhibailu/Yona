@@ -1,15 +1,49 @@
-        // ========== app-objects-sensory.js —— 冻结区说明(2026-09)==========
-        // 本文件三段拼成,**现在没有一段算"活的产品面"**:
-        // 1) 桌面/行动舞台(**用户判定不留,2026-09-22 10:45**):/workspace 动作轨迹
-        //    + 脉冲 + 内心面板。整条接法是 baseline 搬来的旧 UI 配套,不是 rewrite
-        //    设计的产品面。用户原话:「你之前说的动过的部分其实都是你自己写文档的时候
-        //    顺手的,并不是我真的操刀过这一盘……所以项1 应该是不留」。
-        //    **别当活功能看、别为它补功能**;摘除 = 删本段 + index.html 的 #object-drawer
-        //    pane + 后端 /workspace 与 /autonomy/pulse 两个端点。
-        // 2) 感官 视觉/语音/朗读(冻结):后端无 /sensory/* 端点,UI 入口已于
-        //    2026-09 任务4 撤掉(按钮/粘贴/拖图/朗读),代码尸体留在原地防盲切,
-        //    感官接回(旧 D:\MyProject\Yona\src\sensory)时原样复用;
-        // 3) 物件舞台(冻结):/objects 恒空,UI 桌面物件 pane 已删(任务5)。
+        // ===========================================================================
+        // ⏸ 隔离区占位 —— 这个文件**不参与运行**,别当活代码读。
+        //
+        // 它是什么:旧 UI 的"桌面 / 行动舞台"脚本(三段拼成:工作区舞台 + 感官 + 物件舞台),
+        // 2026-09-22 从 `static/` 原样搬来,**内容一个字没改**。
+        //
+        // 为什么在这里(不是遗漏,是有意的决定):
+        //   · `static/index.html` 的 `<script>` 列表里**已经删掉它**(全仓引用数 0);
+        //   · 它服务的两个左栏 pane(「生活事件」「Yona 的工作区」)2026-09-22 11:20
+        //     已按用户拍板**从 index.html 摘除**,配套的后端 `GET /workspace` 与
+        //     `GET /admin/life-events` 也一并删了(`server/app/api/view.py` 模块头);
+        //     它还在打的 `/objects` 与 `/autonomy/pulse` 两个端点仍存在,但
+        //     **脉冲已判未启用/待砍**、`/objects` 是冻结合同位。
+        //   · 用户原话:「你之前说的动过的部分其实都是你自己写文档的时候顺手的,
+        //     并不是我真的操刀过这一盘……所以项1 应该是不留」→ 追问后确认"摘掉吧那就"。
+        //
+        // 三段各是什么、各自的复活条件:
+        //   1) 桌面/行动舞台(**已摘除,不复活**):/workspace 动作轨迹 + 脉冲 + 内心面板。
+        //      ⚠️ 真要接回来,`all_action_trails()` 的**配对规则**(按 `tool_call_id`,
+        //      不是"找最近一条还没配对的 call")必须一起接回来 —— 那个坑的形状是
+        //      "两个结果互换,不报错、只是安静地配错"(2026-09-16 修的真 bug),
+        //      恢复入口写在 `server/app/api/view.py` 模块头。
+        //   2) 感官 视觉/语音/朗读(冻结):后端无 `/sensory/*` 端点,UI 入口已于
+        //      2026-09 任务4 撤掉(按钮/粘贴/拖图/朗读),代码尸体留在原地防盲切,
+        //      感官接回(旧 `D:\MyProject\Yona\src\sensory`)时原样复用。
+        //   3) 物件舞台(冻结):`/objects` 恒空,UI 桌面物件 pane 已删(任务5)。
+        //
+        // ⚠️ **移走后断掉的跨文件调用点(接回时按这张清单补回去)**
+        //    这个文件不再被 index.html 加载,所以下面这些**原本由本文件提供**的函数
+        //    在别处的调用点已一并删除(否则会当场 ReferenceError)。要复活对应能力,
+        //    必须把这些调用点也补回来 —— 只把本文件加回 <script> 是不够的:
+        //      · `_setStageStatus`   ← static/app-messages.js 四处(发送中 / tool_status /
+        //                              busy / done 的舞台状态);⚠️ 其中一处**在发消息主路径上**
+        //      · `_setStageTraceText` ← static/app-messages.js 一处(tool_status 分支)
+        //      · `_cancelStreamingSpeech` ← static/app-messages.js 一处(出错时取消朗读)
+        //      · `_renderVisionInBubble` / `_renderVoiceInBubble`
+        //                             ← static/app-messages.js 两处(感官附件渲染)
+        //      · `_blobToDataUrl`    ← static/app-messages.js 的 `_prepareSensoryRetry()`
+        //      · `_attachVisionImage` ← static/app-media-debug.js 的 `handleImagePick()`
+        //    ⚠️ `_setStageStatus`/`_setStageTraceText` 属于**第 1 段(工作区舞台)**,
+        //    而第 1 段已经判"不复活";所以接回感官时这两个**不要**补回,补它们等于
+        //    把已摘除的面板偷偷长回来。
+        //
+        // 什么时候可以干净删掉:感官接回那天,把第 2 段取出来复用、第 1/3 段丢掉,
+        // 然后删本文件;在那之前它是那两段的唯一存档(旧仓库的对应文件不要依赖)。
+        // ===========================================================================
         // ========== Yona 桌面物件 / 行动舞台 ==========
         let _knownObjectIds = new Set();
         let _announcedObjectIds = new Set();

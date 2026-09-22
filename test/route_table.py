@@ -53,7 +53,10 @@ def simulate(method: str, path: str):
 
 if __name__ == "__main__":
     dump_table()
-    simulate("GET", "/workspace")
+    # (2026-09-22 11:20 改:原来这里 simulate 的是 "GET /workspace" ——
+    #  那个观测面板端点已按用户拍板摘除,再打它只会得到一个误导人的 404。
+    #  换成一个**仍然存在、且走同一段路径匹配逻辑**的端点。)
+    simulate("GET", "/objects")
     simulate("POST", "/chat/stream")
     simulate("GET", "/")
     simulate("GET", "/no/such/endpoint")

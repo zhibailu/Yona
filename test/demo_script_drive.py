@@ -1,10 +1,13 @@
 """Demo 剧本驱动:按步骤打真实端点,输出原样内容(UTF-8 干净)。
 
 步骤:
- 0 内心活动(life-events)—— 她活着:心跳自走生活事件
- 1 建会话 + 聊天(触发工具:换衣服)→ workspace 动作轨迹
+ 1 建会话 + 聊天(触发工具:换衣服)
  2 busy:两条并发,第二条先收 busy 帧
  3 重启补齐由 server 启动逻辑负责(需要重启进程,脚本外验证)
+
+⚠️ 2026-09-22 11:20:原来还有一幕拉 `GET /admin/life-events`(内心活动)与
+`GET /workspace`(动作轨迹)。这两个观测面板已按用户拍板**摘除**(端点一起删),
+所以那两幕去掉了 —— 见 `server/app/api/view.py` 的模块头。
 """
 import json
 import sys
@@ -67,8 +70,10 @@ def pretty_frames(frames):
     return "".join(parts)
 
 
-# 0) 她活着:内心活动
-show("0. 她活着 —— 内心活动(life-events,心跳自走的生活事件)", req("GET", "/admin/life-events"))
+# (2026-09-22 11:20:原来这里第 0 幕拉 GET /admin/life-events(内心活动),
+#  第 2 幕拉 GET /workspace(动作轨迹)。两个观测面板都已按用户拍板**摘除**
+#  (连带端点一起删),再打只会得到 404 —— 所以这两幕删掉,演示从聊天开始。
+#  要复原请看 git 历史里本文件的旧版本与 server/app/api/view.py 的模块头。)
 
 # 1) 聊天触发工具
 sid = json.loads(req("POST", "/sessions", {"title": "demo-1"}))["session_id"]
@@ -79,6 +84,3 @@ t.join()
 show("1. 你说话 —— 聊天流(她调了 change_outfit 工具?)", pretty_frames(out[0]))
 show("   会话消息视图", req("GET", f"/sessions/{sid}")[:800])
 time.sleep(0.5)
-
-# 2) workspace:动作轨迹 = 工具调用可见
-show("2. 动作轨迹(workspace,工具调用留痕)", req("GET", "/workspace")[:900])

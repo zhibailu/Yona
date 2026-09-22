@@ -38,6 +38,7 @@
 | 2026-09-22 10:20 · 人设年龄 **18 岁** 是用户拍板 | ✅ **权威**;⛔ 不许再改回 21 |
 | 2026-09-22 10:45 · **称呼一律取变量**(唯一来源 `VALUES["owner"]`)+ 脉冲判未启用 | ✅ **权威**;⛔ 脉冲不许当活功能/真 bug |
 | 2026-09-22 11:10 · **三个面板/接线的裁决** + "文档擅自升格"这条根因 | ✅ **权威**;⛔ 内心面板/工作区不留 |
+| 2026-09-22 11:20 · ⭐ **删半句 / 归档日志 / 摘面板**(用户"1删了 2要 3摘掉吧那就") | ✅ **权威**;⛔ 两个观测面板已删,别加回来 |
 
 **只想看"现在到底是什么"的人**:读最后三节。
 
@@ -119,7 +120,7 @@ character(含人格文案)依赖 core;server(应用壳)依赖 core + character�
   > ⛔ 【2026-09-22 10:45 更正】这句里的"内心面板"容易被读成**已经设计好的产品面** ——
   > 它的接法与投影其实是 baseline(`2903b2a`)搬来的旧 UI 配套,**这层分量是擅自加的**。
   > **用户 2026-09-22 10:45 判定内心活动(life-events)与桌面(workspace)两个面板不留**,
-  > 现状**标注待砍、不摘**;本条的实质是"聊天流隐藏自走轮"这条投影规则,与面板留不留无关。
+  > 现状:**已摘除**(2026-09-22 11:20,用户「3 摘掉吧那就」);本条的实质是"聊天流隐藏自走轮"这条投影规则,与面板留不留无关。
   > 详见 `server/app/api/view.py` 的模块头。
 - **提示词实验台 ✅(2026-09-06)**:`prompt_lab.py`(项目根,战略调试工具
   用户拍板常驻)真模型交互台 —— 驱动**真实引擎装配**(每次轮前 reload
@@ -1223,6 +1224,12 @@ all=两边都查(只在一边找、怕找不着时用,多带回来的也是相�
 | 端点 `/admin/agent-feed` | `/admin/life-events` |
 | 函数 `get_agent_feed` / `self_talks` | `get_life_events` / `life_events` |
 
+> ⚠️ 【2026-09-22 11:20 后注】**这张表已经是纯历史了** —— 那次改名的两个落点
+> (`/admin/life-events` 端点与 `get_life_events` / `life_events` 函数)
+> **都已随"内心活动面板"一起摘除**(用户判定不留 → 「3 摘掉吧那就」)。
+> 本节记录的是**当年那次改名**的决策与连带改动,不是现状;现状见 2026-09-22 11:20 节
+> 与 `server/app/api/view.py` 的模块头。别照这张表去找端点。
+
 **连带改了前端** `static/app-presets.js`(它的 `fetch` 打的就是这个端点)——
 这是"改个破名字"越出文档范围、进到 API 契约的那一步,**已连同调用方一起改**。
 `test/legacy/heartbeat_demo.py` 与 `test/self_view_probe2.py` 那两句独处轮提示词
@@ -2000,6 +2007,89 @@ sid 拿不到时(`store=None`)**不落盘、不猜卡**。
   **没有替她删**,结果与建议已登记 `OPEN.md` 的临时任务栏 **T1**,等她一句话。
 → 仪器**留在仓库里**(`test/subagent_prompt_lab.py` 的 `A2` + `SHIPPED-A2去半句`),
   以后要复测或加 reps 直接跑;这条对照**以前根本不存在**(10 个变体 + SHIPPED 全用含半句的 A0)。
+
+---
+
+### 2026-09-22 11:20 · ⭐ 三句裁决落地:**删半句 / 归档日志 / 摘面板**
+
+> 用户对本文件 11:10 节末尾三个提问的回答,全文只有三句:
+> 「**1删了**」「**2要**」「**3摘掉吧那就**」。
+> 所以这一节只记**怎么落的、落到哪、连带哪儿**。
+
+#### 一、"1 删了" — `CHAT_SITUATION` 尾巴那半句
+
+`character/personas.py` 的 `CHAT_SITUATION`:
+
+```diff
+- "用户网名叫 {owner} 和你是网友关系，平时会和你发消息聊天，你也有一些tool可用"
++ "用户网名叫 {owner} 和你是网友关系，平时会和你发消息聊天"
+```
+
+**前置实测**(11:12,真模型 24 次)已在本文件上一节记过:那半句**测不出作用**
+(6 个任务格委派率与编造指纹逐格相同) → 它不是承重结构。
+**删的理由是结构性的**:它是不跟随 registry 的能力声明,违反
+`character/persona.py` 的铁律「能力唯一来源 = 本轮 schema + [可用工具用法] 段」。
+→ lab 的 `A2` 变体**保留**,当作"已删掉的那半句"的存档(复测反向时换回注释里那句即可)。
+
+#### 二、"2 要" — 0 消息的会话:判据 + 归档,两条一起才叫"死掉"
+
+| 层 | 做什么 | 落点 |
+|---|---|---|
+| **判据** | 卡退出自走目标 / 补写名单(**不继续补东西**) | `store._has_user_talk()` 按**可见消息**算(排 `shadowed_seqs()`);上一节已落 |
+| **归档** | 内容离开活路径(**整段日志归档**) | **本节新增** `store.archive_log()` + 删除端点里的判定 |
+
+**`archive_log()` 的行为**:把 `sessions/<sid>/chat.log` 移进
+`archive/<ts>-<sid>/chat.log`,并 `memory_forget(sid)` 掉索引缓存。
+触发点:`DELETE /messages/from/{id}` 处理完后**一条可见消息都不剩**时。
+
+⚠️ **只搬日志、不搬卡**(留 `meta.json` / `images` / `subruns` / 目录本身)。
+这个取舍是**故意**的,两条理由都写进了 `archive_log()` 的 docstring:
+1. 用户原话是「当前会话 **0 消息**了」—— 这句话本身就假设**会话还在**,只是消息没了;
+2. **实测出来的坑**:UI 的"重新生成 / 重试"走的是**同一个**删除端点
+   (`static/app-messages.js` 的 `regenerateMessage` / `retryMessage`:先删那条用户消息
+   再重发)。若删到第一条就把**整卡**搬走,紧接着的重发会写进一个**没有 `meta.json`
+   的目录** —— 而 `list_sessions()` 是按 `*/meta.json` 枚举的,结果是
+   **会话从侧边栏消失、聊天还在往里写**。那是静默的数据错位,比"没归档"坏得多。
+   (要"连卡一起归档"另有入口:`DELETE /sessions/{id}` = `delete_session()`。)
+
+**前端**:响应新增 `archived` 字段(归档路径,`None` = 还有可见消息)。
+`deleteMessage()` 读到它就提示「这段对话已归档……」并重拉会话列表。
+
+#### 三、"3 摘掉吧那就" — 两个观测面板:真删,不是标注
+
+上一轮定的是"不留但**标注**不摘";这一轮用户确认**摘**。落地面(比端点大得多):
+
+| 位置 | 动作 |
+|---|---|
+| `server/app/api/view.py` | 删 `GET /workspace`、`GET /admin/life-events` 两个端点 + `all_action_trails` / `life_events` / `_target_card_id` / `_fmt_time` / `_text_of` / `_first_arg_text` 六个私有件 + 两个现在用不上的 import。模块头改写成"**已摘除,别再长回来**"+ 恢复入口 |
+| `static/index.html` | 删 `#inner-life`(生活事件)与 `#object-drawer`(Yona 的工作区)两个 pane —— **顺带带走了里面的「脉冲」按钮**(它本来就被判未启用/待砍);删 `app-objects-sensory.js` 的 `<script>` |
+| `static/app-presets.js` | 删 `_refreshInnerLife()` + 60s 定时器。⚠️ **预设 CRUD 原样保留** |
+| `static/app-core.js` | 删 `_setFeedHeading()`(它只服务已摘除的 pane 标题)与启动时那次 `_refreshObjects()` |
+| `static/app-sessions.js` | 删两处 `_setFeedHeading` 调用 + 四处 `_refreshInnerLife`/`_refreshWorkspace` 调用 |
+| `static/app-messages.js` | 删四处 `_refreshObjects()` 与一处 `setTimeout(_refreshWorkspace, 900)`;新增 `archived` 处理 |
+| `static/app-objects-sensory.js` | 整个文件 → `static/_unused/`(`git mv`),**头部重写成隔离区体例**:它是什么、三段各自的复活条件、什么时候能干净删。`index.html` 不再加载它 |
+| `test/test_view_trails.py` | **删除** —— 它钉的是 `all_action_trails()` 的配对规则,投影函数没了,守卫没有对象。⚠️ 恢复入口与"接回来时必须连配对规则一起接回来"写进了 `view.py` 模块头 |
+| `test/route_table.py` | `simulate("GET", "/workspace")` → 换成仍存在的 `/objects`(否则那次模拟只会误导人看一个 404) |
+| `test/demo_script_drive.py` | 删第 0 幕(拉 `/admin/life-events`)与第 2 幕(拉 `/workspace`) |
+| `test/recall_probe.py` | 注释里"三处同源"→ 改成**两处**(第二处消费方已不存在,但那条教训仍成立) |
+| 文档 8 处 | 上一轮那批"**现状:标注待砍、不摘**"的批注全部改成"**已摘除(2026-09-22 11:20)**";`STRUCTURE.md` §4 的 UI 表两行与端点计数一起改 |
+
+**端点总数 32 → 30**(`api/view.py` 少 2)。`docs/STRUCTURE.md` 里三处数字同步改,
+并重申"端点数一律以代码为准"。
+
+**没跟着走的**:`GET /objects`(冻结合同位 —— 它的"删它的前置条件"原本是
+"先摘掉 `app-objects-sensory.js` 里的 fetch 调用点",**现在这个条件刚被满足**,
+所以它的 docstring 已改成"纯契约占位,真要删不会再有人吃 404")与
+`GET /runtime/status`(零调用方的诊断口,但它是**引擎状态**不是"日志投影面板",
+没有"用户没拍过"的问题,所以不跟着走)。
+
+#### 四、这一轮最该记住的一条
+
+用户这一轮真正纠正的不是三条具体事项,而是**我认定"什么算用户的意图"的方法**:
+`baseline` 搬来的东西 + 我自己写文档时加的分量 ≠ 用户的决定。
+判据只认两条:**用户说过的话**;要查"是不是 rewrite 长出来的",看
+`git log --diff-filter=A` 的**首个 commit**(是 `2903b2a chore: baseline` 就说明是搬来的)。
+详见上一节 §一。
 
 
 

@@ -399,7 +399,11 @@ def pick_variant(name: str) -> str | None:
 #   core.session_log.strip_copied_prefix —— 识别式由 personas.LIFE_EVENT_PREFIX
 #   现推,不是这里写死的正则。以前这里自己存了一份 `_COPIED_MARK`,
 #   于是**投影层 / UI 面板 / 探针三处只有探针在洗**(脏字从另外两个口子漏出去)。
-#   现在三处同源:内核投影(_label_first_text)、server view.life_events、这里。
+#   现在三处同源:内核投影(_label_first_text)、server view 的 `life_events()`、这里。
+#   ⚠️ 【2026-09-22 11:20】第二个口子**已经没有了** —— `view.life_events()` 随
+#      内心活动面板一起被摘除(用户拍板,端点 `/admin/life-events` 同去),
+#      所以现在实际是**两处**:内核投影 + 这里。历史那三处的教训仍然成立
+#      (手抄多份必然漂移),只是其中一个消费方不在了。
 import core.session_log as _slog  # noqa: E402
 
 

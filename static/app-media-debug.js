@@ -99,7 +99,11 @@
             const file = event.target.files[0];
             if (!file) return;
             if (_imgTarget === 'vision') {
-                _attachVisionImage(file);
+                // (2026-09-22 11:20:原来这里调 `_attachVisionImage(file)` —— 它定义在
+                //  app-objects-sensory.js,那个文件已移进 static/_unused/ 且不再加载。
+                //  视觉附件本身早在 2026-09 任务4 就冻结了(没有后端闸口),
+                //  正常 `_imgTarget` 不会是 'vision';真遇到就说清,别静默什么都不做。
+                showSystem('视觉附件能力已冻结(感官接回后再用)。');
                 event.target.value = '';
                 return;
             }
