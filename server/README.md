@@ -13,7 +13,7 @@
 | `app/engine.py` | 组合根 + 生活运行时:装配 composer/loop/llm、心跳、离线补写、每卡 life、时钟覆盖(实验台) |
 | `app/gate.py` | 心跳闸门(方案②):命中概率 = 每天期望 × shape × Δt |
 | `app/llm_setup.py` | 运行时连接配置(UI 唯一入口,落 data/llm.local.json) |
-| `app/worker_tools.py` | 工人的手 —— 只读工具集(web_search / http_get / list_files / read_text_file);文件工具要沙箱根,未拍不接线 |
+| `app/worker_tools.py` | 工人的手 —— 只读工具集(web_search / http_get / list_files / read_text_file),**四件全部接线**;沙箱根由 `params.SUBAGENT_FILE_ROOT` 给(唯一闸门),白名单从根推导 |
 | `app/api/` | 请求域路由:chat(SSE)/ view(观测)/ media(图片)/ config |
 
 ## 本地拍板 / 边界

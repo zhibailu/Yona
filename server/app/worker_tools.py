@@ -15,6 +15,14 @@
   list_files(path, pattern)      列目录/匹配(带跳过表)
   read_text_file(path, ...)      读文本(行范围 + 上限)
 
+🔎 **2026-09-23 起四件全部接线**(用户「B可以加」),**待用户 review**:
+  放行由 `server/app/engine.py` 的 `_worker_file_root()` 决定 —— **根是唯一闸门,
+  白名单从根推导**(`params.SUBAGENT_FILE_ROOT = "worker_files"` → `data/worker_files/`)。
+  ⛔ 同时删掉了 `SUBAGENT_FILE_ROOT or DATA_DIR` 那个兜底:它会让根落回她的 `data/`
+  本体,工人一条 `read_text_file` 就能读到 `llm.local.json`(**api_key**)与
+  `sessions/*/chat.log`(**全部聊天记录**),而且零报错。取证与裁决:
+  `docs/decisions/TIMELINE.md`「2026-09-23 00:42」;段清单:`docs/protocols/SUBAGENT.md` §9.3。
+
 三条纪律:
   1. **不给时间工具**:VISION 决策 8 已判死 —— 时间 = 每轮注入的死信息,不是工具;
      外部信息(搜索/抓取)才是工具。

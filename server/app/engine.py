@@ -122,30 +122,50 @@ _WORKER_LABELS: tuple[tuple[str, str], ...] = (
     ("list_files", "翻本地文件"),
     ("read_text_file", "读本地文件"),
 )
-# 本轮只接**上网的手**:文件工具要一个沙箱根,而根目录 = "她能读到用户的什么",
-# 是**隐私边界**不是技术参数,还没拍(SUBAGENT_FILE_ROOT 空 = 不接)。
-# ⚠ 给工厂的那个根现在是**惰性的**:构造只 resolve 路径、不做任何 IO,
-#   过滤掉之后文件工具根本不会进注册表 —— 它不代表我们采纳了那个根。
+# ---------- 工人的手:一个沙箱根 → 一份白名单(2026-09-23 文件工具已接) ----------
+# 🔎 **待用户 review**:决策(给不给工人本地文件)是用户 2026-09-23 拍的
+#    (「B可以加……它本身的作用我是认可的」);"根放在哪、目录叫什么、
+#    两道闸门怎么合"是我定的 —— 每段的理由都写在下面对应位置。
 #
-# ⚠⚠ 下面这个白名单是「放开文件工具」的**第二道闸门**(2026-09 清理时标注,行为未动)。
-#   事实:文件工具的放行有**两处**判定,现在是一处半开着、一处关着 ——
-#     ① `server/params.py` 的 `SUBAGENT_FILE_ROOT`(填上非空串 = 给沙箱根);
-#     ② 本常量(硬白名单,`in _WORKER_WEB_TOOLS` 是**无条件**过滤,与根是否为空无关)。
-#   要真放开,必须**同时**改这两处:只填 params 的根,文件工具仍会在下面那行
-#   `if tool.name in _WORKER_WEB_TOOLS` 被整批滤掉 —— **静默不生效**(工人既不会用,
-#   也不报错,能力句照旧只说"上网查"),很容易被误判成"接线失败"。
-#   反过来,只改本白名单、不给根,则会拿下面 `SUBAGENT_FILE_ROOT or DATA_DIR` 的
-#   `DATA_DIR` 当根 = 她的 data/ 本体(会话日志,连同 `data/llm.local.json`
-#   —— 那里面有 api_key,见 server/app/llm_setup.py 的 `_CONFIG_FILENAME` / `config_path()`),那是**越权读用户数据**,
-#   比不接线更糟。所以两处必须一起动。
-#   要不要放开 = 隐私边界,判定与待办见 docs/tasks/OPEN.md 那一行(`SUBAGENT_FILE_ROOT`)
-#   与 docs/protocols/SUBAGENT.md §9(worker_tools 那一行)。
-#   将来手术:把本常量换成"从参数推导的放行集"时,这段注释连同 `or DATA_DIR` 的兜底
-#   一起删(那时根必须显式给,不再有兜底)。
+# 原来这里是**两道闸门**(params 的根 + 本文件的硬白名单),老注释写着
+# "必须同时改这两处:只填根仍会被硬白名单滤掉(**静默不生效**);只改白名单
+#  则根会兜到 `DATA_DIR`(**越权读用户数据**)"。2026-09-23 把两道**合成一道**:
+# 根是唯一来源,白名单**从根推导** —— 结构上消灭了"只改一半"的可能。
+def _worker_file_root() -> Path | None:
+    """工人可读的本地文件根;`None` = 不给文件工具。
+
+    相对路径按 `DATA_DIR` 解析(这样换 `YONA_DATA_DIR`——比如测试的临时盘——
+    根会跟着走,不会指回仓库里那份真实数据)。空串 = 不给。
+    """
+    raw = str(SUBAGENT_FILE_ROOT or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw)
+    return candidate if candidate.is_absolute() else (DATA_DIR / candidate)
+
+
+_worker_file_root_path = _worker_file_root()
+if _worker_file_root_path is not None:
+    # 按需建目录(与 `SubRunStore.save()` 同款:路径算得出来就先建好,不让调用方
+    # 先手动 mkdir)。不建的话 `list_files` 只会回"目录不存在",看起来像功能坏了。
+    _worker_file_root_path.mkdir(parents=True, exist_ok=True)
+
 _WORKER_WEB_TOOLS = ("web_search", "http_get")
+_WORKER_FILE_TOOLS = ("list_files", "read_text_file")
+# ⚠️ 白名单**从根推导** —— 别再写成硬编码的常量元组(那正是"两道闸门"的来源)。
+#    给工厂的那个根仍是**惰性**的:构造只 resolve 路径、不做任何 IO;
+#    文件工具被滤掉时,它根本不进注册表,所以兜底值不构成"我们采纳了它"。
+_worker_allow = _WORKER_WEB_TOOLS + (
+    _WORKER_FILE_TOOLS if _worker_file_root_path is not None else ()
+)
+# ⛔ **别加回 `or DATA_DIR` 那种兜底。** 一旦根兜到 `DATA_DIR` = 她的 `data/` 本体,
+#    工人一条 `read_text_file("llm.local.json")` 就能拿到 **api_key**、
+#    一条 `read_text_file("sessions/<sid>/chat.log")` 就能读到**全部聊天记录**,
+#    **而且零报错、零症状**(2026-09-23 当场量过,见
+#    `docs/decisions/TIMELINE.md`「2026-09-23 00:42 · 工人 `source` 正名 + 本地文件接线」)。
 _worker_tools = ToolRegistry([
-    tool for tool in make_read_only_tools(SUBAGENT_FILE_ROOT or DATA_DIR)
-    if tool.name in _WORKER_WEB_TOOLS
+    tool for tool in make_read_only_tools(_worker_file_root_path or DATA_DIR)
+    if tool.name in _worker_allow
 ])
 
 

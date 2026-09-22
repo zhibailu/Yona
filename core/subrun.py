@@ -386,7 +386,25 @@ def execute(
         overrides["model"] = spec.model
 
     try:
-        result = loop.run_turn(spec.task, source="user", **overrides)
+        # ✅ 2026-09-23(用户拍板:"A 可以")—— `source` 从 `"user"` 正名为 `"subagent"`。
+        #
+        # 原先记 `"user"`,后果是**日志说假话**:工人那一轮躺在
+        # `sessions/<sid>/subruns/<run_id>.jsonl` 里,`turn/start` 与 `user/message`
+        # 都写着 `"source": "user"` —— 翻日志时它**看起来像用户亲手打的字**。
+        # 而 `source` 这个字段存在的**全部意义就是记来源**(`docs/protocols/SUBAGENT.md` §4.1:
+        # 「`subagent` 是第四个,不给值才是例外」;现有四个值:user / self / compact / user-edit)。
+        #
+        # ⛔ **工人轮不进记忆 —— 这是一条决定,不是"刚好掉进 else"。**
+        #    `core/memory.py` 的 `rows_from_events()` 只认两支:`"self"` → LIFE、
+        #    `"user"` → TALK;**认不出的 source 整轮不产生记忆行**。所以 `"subagent"`
+        #    落进"不产生"那一支。这正是要的结果:工人那一轮记的是"派出去干活",
+        #    **不是**她对用户说的、也不是用户对她说的。
+        #    ⚠️ 若有人把它并进 `"user"`:她回忆时会记得"主人让我去查长沙天气",
+        #    **而用户从没说过这句话**(用户当时的原话只是问天气)。
+        #    ⚠️ 今天**没有任何路径**把工人日志喂进记忆(记忆只读**卡自己的** chat.log),
+        #    所以这条现在是"把巧合变成明写的决定",不是修一个正在发生的错。
+        #    将来任何"合并日志 / 让她翻自己做过什么"的功能,都必须回头尊重这一条。
+        result = loop.run_turn(spec.task, source="subagent", **overrides)
         kind = (result.reason or {}).get("kind") or ""
         rec.steps = int(result.steps or 0)
         # 只有正常收尾才算完成;撞上限(max-steps/max-tokens)是"没干完",老实记 failed。

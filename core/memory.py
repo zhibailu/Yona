@@ -161,6 +161,15 @@ def rows_from_events(events: Iterable[Any], *, strip_prefix: str = "") -> list[M
 
     strip_prefix:传内容层那个标记模板时,会把**被模型抄进正文**的那行剥掉
     (见 `core.session_log.strip_copied_prefix`)—— 脏数据在日志里,治在读侧。
+
+    ⛔ **工人轮(`source="subagent"`)不进记忆 —— 这是一条决定(2026-09-23 用户拍板),
+    不是"刚好掉进 else"。** 下面只认 `"self"`(LIFE)与 `"user"`/`"user-edit"`(TALK),
+    认不出的 source 整轮不产生记忆行 —— `"subagent"` 就落在这一支,这是要的结果。
+    理由:工人那一轮记的是"派出去干活",**不是**她对用户说的、也不是用户对她说的;
+    并进 TALK 会让她回忆时记得"主人让我去查长沙天气",而**用户从没说过那句话**。
+    ⚠️ 今天没有任何路径把工人日志喂进这里(记忆只读**卡自己的** `chat.log`,
+    工人事件住在 `sessions/<sid>/subruns/`),所以这一条是"把巧合写成明写的决定";
+    将来做"合并日志 / 让她翻自己做过什么"时,必须回头尊重它。
     """
     rows: list[MemoryRow] = []
     for t in _turns(events):

@@ -454,11 +454,11 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 | 路径 | 状态 |
 |---|---|
 | `core/subrun.py` | **执行器(已毕业进内核)** —— 只 import core 四个原语 |
-| `server/app/worker_tools.py` | **工人的手(已毕业进产品层)** —— 四个只读工具 + 沙箱 + 错误池;文件工具因沙箱根未拍不接线。⚠️ **本文件只剩实现** —— 模型可见文案(4 个 `description` + 4 个 `usage` + 11 条参数说明)2026-09-22 已归位到 `character/tools.py` 的 `WORKER_*` 常量(见下面"文案归位"一条) |
+| `server/app/worker_tools.py` | **工人的手(已毕业进产品层)** —— 四个只读工具 + 沙箱 + 错误池。✅ **2026-09-23 四件全部接线**(文件工具由用户「B可以加」放开,见 §9.3)。⚠️ **本文件只剩实现** —— 模型可见文案(4 个 `description` + 4 个 `usage` + 参数说明)2026-09-22 已归位到 `character/tools.py` 的 `WORKER_*` 常量(见下面"文案归位"一条) |
 | `character/tools.py` | 委派工具文案 + 工厂(能力句由工人工具集**生成**)+ **工人工具的全部模型可见文案**(`WORKER_*`) |
 | `character/personas.py` | `SUBAGENT_SYSTEM`(工人的任务说明)、`SUBAGENT_BUDGET_TEMPLATE`(步数预算) |
-| `server/app/engine.py` | 装配 + 接线(runner / 能力表 / 晚绑定 llm / **子运行轨迹仓**) |
-| `server/params.py` | 三个 `SUBAGENT_*` 参数,全 ⏳ |
+| `server/app/engine.py` | 装配 + 接线(runner / 能力表 / 晚绑定 llm / **子运行轨迹仓** / **沙箱根与白名单推导**) |
+| `server/params.py` | 四个 `SUBAGENT_*` 参数:`MAX_STEPS` / `OUTPUT_MAX_TOKENS` 仍 ⏳;**`FILE_ROOT` ✅ 2026-09-23 已拍**(见 §9.3) |
 | `test/lab/scheduler.py` | 队列(**仍未收口,未毕业**) |
 | `test/subrun_probe.py` | 探针:`py test/subrun_probe.py [--real]` |
 | `test/subagent_prompt_lab.py` | 提示词 A/B 实验台(真模型,出委派率表) |
@@ -525,7 +525,43 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 > 而 **`usage` 走 `[可用工具用法]` 段,那段从未被渲染过** —— 工人的 SYSTEM
 > 是一条静态串,composer 整条不跑(五天,零症状)。所以那 2 条**已接线工具**的
 > `usage` 是"住对了地方、但够不着模型";另 2 条(`list_files` / `read_text_file`)
-> 则连 `description` 都到不了 —— **因为工具本身没接线**(等 `SUBAGENT_FILE_ROOT`)。
-> 现已修(甲A,见 §4.1 / §4.2 与 `docs/decisions/TIMELINE.md`「2026-09-23 00:01」)。
+> 则连 `description` 都到不了 —— **因为工具本身没接线**。
+> **两件病都已修**:通道 = §4.1 甲A;工具 = §9.3(2026-09-23 同一天)。
+> **现在四件的 `description` / 参数说明 / `usage` 全部到达模型。**
 > **教训:"文案归位"和"文案生效"是两件事,验收时必须分别给证据。**
+
+### 9.3 ✅ 工人本地文件接线(2026-09-23,用户「B可以加」)
+
+**用户原话**:「B可以加,不过这个也几乎都是你操盘的,**得注释一下,好让我以后记得过来
+review**,它本身的作用我是认可的。」
+
+**落点与取值**:
+- `server/params.py` 的 `SUBAGENT_FILE_ROOT = "worker_files"` —— 相对 `DATA_DIR` 解析
+  (换 `YONA_DATA_DIR` 跟着走),实际根 = `data/worker_files/`;
+- `server/app/engine.py` 的 `_worker_file_root()`;目录按需创建(与 `SubRunStore.save()` 同款);
+- 白名单 `_worker_allow` = `_WORKER_WEB_TOOLS` + (**根存在时**才有的)`_WORKER_FILE_TOOLS`。
+
+**⚠️ 这一条最重要的不是"加了两个工具",是"把两道闸门合成一道"。**
+原来文件工具的放行有**两处判定**(params 的根 + `engine` 的硬白名单),老注释自己写着
+「必须同时改这两处:只填根 → 被硬白名单整批滤掉(**静默不生效**);只改白名单 →
+根兜到 `DATA_DIR`(**越权读用户数据**)」。现在**根是唯一来源,白名单从根推导** ——
+"只改一半"在结构上不可能了。
+
+**⛔ 同时删掉了 `SUBAGENT_FILE_ROOT or DATA_DIR` 那个兜底**,这是必须删的:
+兜底会让根 = 她的 `data/` 本体,**实测**(2026-09-23,当场跑)——
+
+| 动作 | 兜底方案下 | 现在 |
+|---|---|---|
+| `read_text_file("llm.local.json")` | ✅ 读到,字段含 **`api_key`** | ❌ 拒绝 |
+| `read_text_file("sessions/<sid>/chat.log")` | ✅ 读到,**total_lines 3257** | ❌ 拒绝 |
+| `read_text_file("../llm.local.json")` | — | ❌ 拒绝(路径越界) |
+| `list_files("..")` | — | ❌ 拒绝(路径越界) |
+
+**且兜底方案零报错、零症状** —— 这正是它危险的地方。
+
+**🔎 待用户 review 的部分**(决策是你拍的,细节是 AI 定的):
+目录名叫 `worker_files`(刻意避开**已摘除的"桌面工作区"** pane 的名字)、
+根采用"相对 `DATA_DIR` 解析"的语义、闸门合并的具体写法。
+标记 `🔎` 已加进 `params.py` 的图例,`grep 🔎` 可一次找全。
+
 

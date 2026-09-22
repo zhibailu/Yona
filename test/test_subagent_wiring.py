@@ -10,7 +10,11 @@
                                               `character/persona.py` 的
                                               `build_worker_composer`;段清单的守卫在
                                               `test/test_worker_system.py`)
-  ③ 工人轮在日志里认不认得出来?                                -> 现在认不出来
+  ③ 工人轮在日志里认不认得出来?                                -> ✅ 现在认得出来
+                                             (`source="subagent"`,2026-09-23 正名;
+                                              原先是 `"user"` —— 见 §④ 与 `core/subrun.py`
+                                              的 `execute()` 里那段 ⛔ 注释,
+                                              含"工人轮**不进记忆**"那条决定)
   ④ 工具注册进产品那份 module 级 registry 会怎样?              -> 重跑就炸
   ⑤ retain_result 什么时候被收集?                             -> 构造时快照
 
@@ -241,23 +245,54 @@ def test_persona_leaks_unless_the_subrun_overrides_system() -> None:
     assert hits == ["user"]   # builder 没被 (b) 问过 —— 覆盖真的绕开了它
 
 
-# ---------- ④ 工人轮在日志里认不出来(现状) ----------
+# ---------- ④ 工人轮在日志里认不认得出来(✅ 2026-09-23 已正名) ----------
 
 
-def test_subrun_turn_is_indistinguishable_from_a_chat_turn() -> None:
-    """现状记录:子运行的 turn/start 记的是 source="user"(core/subrun.py 的 `execute()` 里
-    `loop.run_turn(spec.task, source="user", ...)` 那行)。
+def test_subrun_turn_is_marked_subagent_not_user() -> None:
+    """子运行的 `turn/start` 记的是 **`source="subagent"`**。
 
-    意思是**主日志里"工人轮"和"真人聊天轮"长得一模一样** ——
-    与 TOOL_VISIBILITY.md §3 那个"自走与补写撞在 source='self' 上"是同一类问题,
-    只是换了一层。这里如实钉住现状,不正名:改成什么键由 L2 判定键一起拍。
+    **2026-09-23 用户拍板正名**(原话:"A 可以")。原先记 `"user"` —— 后果是
+    **日志说假话**:工人那一轮躺在 `sessions/<sid>/subruns/<run_id>.jsonl` 里,
+    `turn/start` 与 `user/message` 都写着 `"source": "user"`,翻日志时它**看起来像
+    用户亲手打的字**。而 `source` 存在的**全部意义就是记来源**。
+
+    本文件原先有一条 `test_subrun_turn_is_indistinguishable_from_a_chat_turn`
+    **如实钉住那个现状,并写明"不正名"** —— 那条已被本条取代(正名做掉了,
+    钉现状的守卫就该翻面)。原行留下的类比仍然成立:`TOOL_VISIBILITY.md` §3 那个
+    "自走与补写撞在 `source='self'` 上"是**同一类问题**,只是换了一层。
+
+    ⚠️ 这里同时钉住 **"工人轮不进记忆"** 那条决定:`core/memory.py` 的
+    `rows_from_events()` 只认 `"self"`(LIFE)/ `"user"`·`"user-edit"`(TALK),
+    **认不出的 source 整轮不产生记忆行**。所以 `"subagent"` 落进"不产生"那一支 ——
+    **这是要的结果,不是巧合**:工人那一轮记的是"派出去干活",不是谁说的话。
+    并进 TALK 会让她回忆时记得"主人让我去查长沙天气",而用户从没说过那句话。
     """
     store = _store("source")
     rec = execute(SubRunSpec(task="干活", system=SUB_SYSTEM),
                   MockLLM([AssistantOutput(text="好了")]), store=store)
     starts = [e for e in rec.events if e["type"] == "turn/start"]
     assert len(starts) == 1
-    assert starts[0]["data"]["source"] == "user"
+    assert starts[0]["data"]["source"] == "subagent", (
+        "工人轮又被记成别的 source 了 —— `source` 是记来源的字段,改它前先看 "
+        "core/subrun.py 里 `execute()` 那段 ⛔ 注释(含「工人轮不进记忆」那条决定)"
+    )
+
+    # user/message(任务书)也跟着记 —— 同一条纪律,两处一起钉
+    users = [e for e in rec.events if e["type"] == "user/message"]
+    assert users and all(e["data"]["source"] == "subagent" for e in users)
+
+    # 反面:它**不能**落进记忆的那两支(这是决定本身,不是实现细节)。
+    # 用同形状的一份日志探它 —— `rows_from_events` 收的是 Event 对象,不是 rec.events。
+    from core.memory import rows_from_events
+    probe = SessionLog("subagent:memory-probe")
+    probe.append("turn/start", turn=1, source="subagent")
+    probe.append("user/message", turn=1, source="subagent",
+                 content=[{"type": "text", "text": "去查长沙天气"}])
+    probe.append("assistant/message", turn=1,
+                 content=[{"type": "text", "text": "查到了。"}])
+    assert rows_from_events(probe.events) == [], (
+        "工人轮产生记忆行了 —— 它会让她把'派出去的活'记成'主人说的话'"
+    )
 
 
 # ---------- ⑤ 注册进产品那份 registry ----------
@@ -322,7 +357,7 @@ if __name__ == "__main__":
     test_fresh_instance_inside_a_tool_works()
     test_same_instance_inside_a_tool_deadlocks()
     test_persona_leaks_unless_the_subrun_overrides_system()
-    test_subrun_turn_is_indistinguishable_from_a_chat_turn()
+    test_subrun_turn_is_marked_subagent_not_user()
     test_registering_into_the_persistent_registry_breaks_on_rebuild()
     test_retain_is_snapshotted_when_the_loop_is_built()
     print(f"subagent wiring all tests passed ({time.time() - started:.2f}s)")

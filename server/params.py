@@ -9,6 +9,9 @@
   ✅ = 用户拍板(日期)
   ⏳ = 待拍(2026-09 收编时的沿用值;拍板后改这里,改完把 ⏳ 换成 ✅)
   🔧 = 开发/演示参数,非产品语义(仅 YONA_GATE_HOT 演示用)
+  🔎 = **决策是用户拍的、实现细节是 AI 定的,等用户过来 review**
+       (2026-09-23 立。用在"我给了一个能跑的具体做法,但里面有几个我替你做的
+       小选择"的地方 —— 让 review 有的放矢,而不是重看一遍全部代码。)
 """
 
 from __future__ import annotations
@@ -148,11 +151,24 @@ SUBAGENT_OUTPUT_MAX_TOKENS = 8192
 #    白烧 110s+81s 和约 10k token)。8 步是照这个节奏给的实验值,**仍待你拍**。
 SUBAGENT_MAX_STEPS = 8
 
-# ⏳ 待拍:工人能不能翻**本地文件**。空串 = **不接文件工具**(工人只有上网的手)。
-#    这不是能拍脑袋给的默认值:根目录决定"她能读到用户的什么",是**隐私边界**,
-#    不是技术参数。没拍之前只接 web_search / http_get,
-#    list_files / read_text_file 留在 server/app/worker_tools.py 里不接线。
-SUBAGENT_FILE_ROOT = ""
+# ✅ **2026-09-23 拍板**:用户原话「B可以加,不过这个也几乎都是你操盘的,得注释一下,
+#    好让我以后记得过来review,它本身的作用我是认可的」。
+# 🔎 **本条待用户 review** —— "要不要给工人本地文件"是用户拍的;
+#    "根放哪、目录叫什么"是我定的(见下面三段)。
+#
+# 它是**工人能读到的本地文件的根**。根目录决定"工人能读到用户的什么",是
+# **隐私边界**不是技术参数。取值语义:
+#   · 空串     = **不接文件工具**(工人只剩上网的手)—— 本参数是**唯一闸门**
+#   · 相对路径 = 相对 `DATA_DIR` 解析(引擎做;换 `YONA_DATA_DIR` 也跟得上)
+#   · 绝对路径 = 原样使用(留给"指向某个真实目录"的将来)
+#
+# ⛔ **不许用 `DATA_DIR` 兜底**(原来引擎里就是 `SUBAGENT_FILE_ROOT or DATA_DIR`)。
+#    那个兜底会让根 = 她的 `data/` **本体**,而里面有两样东西:
+#      `llm.local.json`(**api_key**)与 `sessions/*/chat.log`(**全部聊天记录**)。
+#    2026-09-23 当场量过:只要那样兜底,工人一条 `read_text_file` 就能读到这两者,
+#    而且**一条报错都没有**(详细取证见 `docs/decisions/TIMELINE.md`「2026-09-23」)。
+#    现在的实现是"根由本参数显式给出,缺了就整批不给文件工具"。
+SUBAGENT_FILE_ROOT = "worker_files"
 
 
 # ⏳ 待拍(2026-09-22 从 `server/app/engine.py` 的硬编码提上来,值一个没变):
@@ -192,7 +208,7 @@ _ROWS: list[tuple[str, str, str]] = [
     ("SUBAGENT_OUTPUT_MAX_TOKENS", str(SUBAGENT_OUTPUT_MAX_TOKENS), "⏳ 子运行输出上限(实验值)"),
     ("SUBAGENT_MAX_STEPS", str(SUBAGENT_MAX_STEPS), "⏳ 子运行步数上限(实验值)"),
     ("SUBAGENT_FILE_ROOT", SUBAGENT_FILE_ROOT or "(未接)",
-     "⏳ 工人能否读本地文件(隐私边界)"),
+     "✅ 2026-09-23 工人可读的本地文件根(相对 DATA_DIR);🔎待 review"),
 ]
 
 

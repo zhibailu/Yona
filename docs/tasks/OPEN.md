@@ -1,7 +1,7 @@
 # 开放项 / 待拍(tasks)
 
 > 来自旧 `MAP.md` 四节。⏳ 未拍 = 不许默认、不许把沿用值当已定。参数级 ⏳ 权威在 server/params.py。
-> **落盘 2026-09-17 20:37;最近核对 2026-09-23 00:01(工人 SYSTEM 装配:段清单 vs 静态串)。** 核对过就必须改这一行。
+> **落盘 2026-09-17 20:37;最近核对 2026-09-23 00:40(source 正名 + 工人本地文件接线)。** 核对过就必须改这一行。
 >
 > ⚠️ **下面分三块**:最上面**临时任务栏**(用户点名"一会再测"的,测完删);然后两张表 ——
 > 第一张是**语义/内容层**要你拍的;第二张是**代码审查挖出的接线与真值问题**
@@ -38,7 +38,7 @@
 | **「一条往事是什么」**(可索引的语义单位) | ⏳ **唯一还活着的语义级未决项**(2026-09-21 收敛) | TIMELINE 09-17 §三 第 4 条 |
 | `SUBAGENT_OUTPUT_MAX_TOKENS = 8192` | ⏳ 待拍(实验值,非产品值;实测 4096 会被 reasoning 吃满) | `params.py` 的 `SUBAGENT_OUTPUT_MAX_TOKENS` |
 | `SUBAGENT_MAX_STEPS = 8` | ⏳ 待拍(实测 4 步不够一次网页调研) | `params.py` 的 `SUBAGENT_MAX_STEPS` |
-| `SUBAGENT_FILE_ROOT = ""` | ⏳ 待拍(**隐私边界**,不是技术参数;空串 = 不接文件工具) | `params.py` 的 `SUBAGENT_FILE_ROOT` |
+| `SUBAGENT_FILE_ROOT = "worker_files"` | ✅ **已裁决并接线(2026-09-23,用户「B可以加……它本身的作用我是认可的」)**。工人从此多了**翻/读本地文件**的手(`list_files` / `read_text_file`);沙箱根 = `data/worker_files/`(相对 `DATA_DIR` 解析,换 `YONA_DATA_DIR` 跟着走)。**最重要的一处结构改动:原来文件工具的放行有「两道闸门」(params 的根 + `engine` 的硬白名单),老注释写着"只改一处会静默不生效 / 越权读数据"—— 现在合成一道:根是唯一来源,白名单从根推导**,结构上消灭了"只改一半"。⛔ 同时**删掉了 `SUBAGENT_FILE_ROOT or DATA_DIR` 那个兜底**:它会让根 = 她的 `data/` 本体,而 2026-09-23 当场量过——工人一条 `read_text_file("llm.local.json")` 就能拿到 **api_key**、一条 `read_text_file("sessions/<sid>/chat.log")` 就能读到**全部聊天记录**(total_lines 3257),**且零报错**。现已验证:`../` 与根外路径**全部被拒**,根内文件可读 | 🔎 **待用户 review**:决策是用户拍的,**"根放哪、目录叫什么、闸门怎么合"是 AI 定的**。`server/params.py` 与 `server/app/engine.py` 两处都标了 `🔎`(图例已加进 `params.py` 头部)。目录名叫 `worker_files` 是怕与**已摘除的"桌面工作区"** pane 混名;想改名字就改 params 一个值 | `params.py` 的 `SUBAGENT_FILE_ROOT` |
 | `MEMORY_DEBT_MAX_WAIT_SEC = 120.0` | ⏳ 待拍(防饿死兜底;实测 147 ms/条) | `params.py` 的 `MEMORY_DEBT_MAX_WAIT_SEC` |
 | `launch_subagent` description 补"收益"那段 | ⚠️ 待核 —— 可能已被 `character/tools.py` 的 `make_launch_subagent_tool()` 里 `description=` 那几行半覆盖 | character/tools.py |
 | `W_SPARSE` 融合权重 | ⚙ 实测选定 0.2(**非拍板**),⏳ 可调 | core/memory.py |

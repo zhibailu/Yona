@@ -134,7 +134,8 @@ Layer 1 · 内核(yona-rewrite/core)
   > 【2026-09-21 23:30 更正】P2 / P3 / P4 早已落地,原挂 ⏳ 会直接误导排期 —— 真相:`docs/decisions/TIMELINE.md`「P0-P4 · 内核与会话(09-02/03)」列了"事件日志 / 单循环 / 工具三件套 / 流式+chunk / SYSTEM 装配(builder)/ surface / 心跳(`source=self`)/ 会话存储 + thin router + 旧 UI 复用";代码侧 `core/composer.py`、`core/heartbeat.py`、`server/store.py` 均在。P1 状态未动(它是否等价于 `turn_lab.py` 无法确认)。
 
 Layer 2 · 旗舰(小夜子)
-  ✅ 工具集:搜网页 / 取页面(`server/app/worker_tools.py`,⚠️ **文件工具未接线** —— `SUBAGENT_FILE_ROOT=""`);**时间不是工具**(见决策 8);记忆已落地为 `recall` 工具(`character/tools.py` 的 `make_recall_tool()`)
+  ✅ 工具集:搜网页 / 取页面 / **翻本地文件 / 读本地文件**(`server/app/worker_tools.py`,**四件全部接线**,2026-09-23 起;沙箱根 = `data/worker_files/`,见 `protocols/SUBAGENT.md` §9.3);**时间不是工具**(见决策 8);记忆已落地为 `recall` 工具(`character/tools.py` 的 `make_recall_tool()`)
+  > 【2026-09-23 00:42 更正】上一行原写「⚠️ **文件工具未接线** —— `SUBAGENT_FILE_ROOT=""`」,已过时:用户 2026-09-23「B可以加」,文件工具**已接**,根 = `data/worker_files/`(相对 `DATA_DIR` 解析)。下一行那条 2026-09-21 更正里引的「空串 = 不接文件工具(工人只有上网的手)…没拍之前只接 web_search / http_get」**是当时的真实状态**,保留作历史;现在的取值与闸门设计见 `docs/decisions/TIMELINE.md`「2026-09-23 00:42」。
   > 【2026-09-21 23:30 更正】原文「⏳ 工具集:搜索 / 时间 / 文件 / (记忆:RAG 待启动轨道)」与**同一份文件 :84**「**时间 = 动态死信息,不是工具**:get_time 退役」直接对立;而且记忆也已进产品、文件工具没接线 —— 真相:`test/test_character.py` 的 `test_time_is_not_a_tool` 断言 `get_time` 工具不存在;记忆 = `core/memory.py` + `character/tools.py` 的 `make_recall_tool()` + `server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行;工人文件工具 = `server/params.py` 的 `SUBAGENT_FILE_ROOT`「空串 = **不接文件工具**(工人只有上网的手)…没拍之前只接 web_search / http_get」。
   ⏳ 生命行为:后台该做点什么(基于 P3)
   ✅ 最小 Web:`server/main.py`(薄壳路由,2026-09-21 实测 **309 行 / 32 端点**)+ `static/` 极简前端(**原"<200 行"指标已作废**,现状见 `docs/STRUCTURE.md`)

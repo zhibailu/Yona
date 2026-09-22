@@ -85,16 +85,21 @@ L2  轮次种类        一个键，查出「身份 + 模式 + 工具可见性�
 | **补写(离线回放)** | **`"self"`** | **`log.time_cursor is not None`** 且 **`engine._backfill_clock["ts"]` 非 0** | 她 | **空注册表** |
 | 压缩摘要 | `"compact"` | `session_log.replace()` | — | — |
 | 用户编辑 | `"user-edit"` | `store.py` | — | — |
-| 工人(**已落地**) | `"user"` ⚠️ **未正名**(见 `SUBAGENT.md` §4.1) | — | 工人 | 只读白名单(`engine._worker_tools`:web_search / http_get) |
+| 工人(**已落地**) | **`"subagent"`** ✅ **2026-09-23 正名** | — | 工人 | 只读白名单(`engine._worker_tools`:**四件** —— web_search / http_get + **list_files / read_text_file(2026-09-23 接)**) |
 
+> 【2026-09-23 00:40 更正】**工人那一行两格都过时了,已改。**
+> ① `source`:原写 `"user"` + "⚠️ 未正名" —— 用户 2026-09-23 拍板正名,现为 **`"subagent"`**;
+>    钉它的测试也翻面了(`test/test_subagent_wiring.py` 的
+>    `test_subrun_turn_is_marked_subagent_not_user`,原 `..._is_indistinguishable_from_a_chat_turn` 已删)。
+>    ⚠️ 连带一条**决定**:工人轮**不进记忆**(`core/memory.py` 的 `rows_from_events` 只认
+>    `"self"`/`"user"`·`"user-edit"`,认不出的整轮丢掉)—— 详见 `core/subrun.py` 的 `execute()` 里那段 ⛔ 注释。
+> ② 工具集:原写"只接 web_search / http_get" —— 用户 2026-09-23「B可以加」,
+>    文件工具已接,沙箱根 = `data/worker_files/`(见 `SUBAGENT.md` §9.3)。
+>
 > 【2026-09-21 23:15 更正】「工人(计划中)/`source="subagent"`」当时写错了(与本文 §4 的更正
 > 和代码都打架) —— 真相:`server/app/engine.py` 的 `_tools.register(make_launch_subagent_tool(...))`
-> 已把它注册进产品 `_tools`;`engine.py` 的 `_worker_tools`(由 `_WORKER_WEB_TOOLS` 过滤
-> `make_read_only_tools`)只接 `web_search` / `http_get`;
-> `core/subrun.py` 的 `execute()` 里那句 `loop.run_turn(spec.task, source="user", ...)`
-> 记的 `source` 是 `"user"`(`test/test_subagent_wiring.py` 的
-> `test_subrun_turn_is_indistinguishable_from_a_chat_turn` 钉住);
-> 全仓库无 `source="subagent"`。
+> 已把它注册进产品 `_tools`。**注意:那段更正里说"全仓库无 `source="subagent"`" 当时是对的,
+> 现在不再成立 —— 它已经是产品的真实取值。**
 
 **两个要点:**
 
@@ -129,7 +134,7 @@ BY_KIND = {
     "chat":     {},   # ⏳ 现状:她的全量
     "self":     {},   # ⏳ 现状:她的全量
     "backfill": {},   # ⏳ 现状:空(调用点硬传 ToolRegistry([]);本表要收编它)
-    "worker":   {},   # ⏳ 现状:web_search / http_get(见下)
+    "worker":   {},   # ✅ 2026-09-23 现状:四件全开(见下)
 }
 ```
 
@@ -139,10 +144,11 @@ BY_KIND = {
 > | 工人工具 | 现状 |
 > |---|---|
 > | `web_search` / `http_get` | ✅ 已接线(`engine._worker_tools`) |
-> | `list_files` / `read_text_file` | ⏳ **未接线** —— 要沙箱根(`SUBAGENT_FILE_ROOT`),隐私边界待拍 |
+> | `list_files` / `read_text_file` | ✅ **2026-09-23 已接线**(用户「B可以加」)—— 沙箱根 = `data/worker_files/`;见 `SUBAGENT.md` §9.3 |
 >
-> 所以"工人那一格"已经不是"空",而是"**只有网络两件**"。待拍的是:
-> 文件工具接线后归谁批、要不要按轮次收窄。
+> 所以"工人那一格"现在**四件全开**。**已解决的旧待拍**:"文件工具接线后归谁批"
+> —— 实际做法是让**根成为唯一闸门**(`engine._worker_file_root()`,白名单从根推导),
+> 不再有"两处判定要同时改"的问题。**仍未拍的**:要不要按轮次收窄。
 
 **待拍清单:**
 
@@ -151,7 +157,7 @@ BY_KIND = {
 | 1 | 四个轮次种类各放哪些工具 | 用户原话:"除了这几个 source 的 allow/deny 该放哪些东西外,都对齐了" |
 | 2 | 判定键的最终形态 | `source` 单独够不够,还是必须派生"轮次种类"(§3 发现自走/补写撞车) |
 | 3 | 补写轮的空集:继续调用点硬传,还是收进本表 | 收进来才有"单一落点" |
-| 4 | 工人那一格 | 网络两件已接线;**文件工具接线与否**待拍(依赖 `SUBAGENT.md` §7) |
+| 4 | 工人那一格 | ✅ **2026-09-23 已解决**:四件全开(网络两件 + 文件两件);"归谁批"的答案是**根即闸门**(`engine._worker_file_root()`,白名单从根推导),不再有"两处判定要同时改"的问题。**仍未拍**:要不要按轮次收窄 |
 
 ---
 

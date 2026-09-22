@@ -631,12 +631,15 @@ def make_recall_tool(
 #    修法:`character/persona.py` 的 `build_worker_composer()` + `engine._worker_system`
 #    (用户拍板"甲A")。**"有人读"和"到了模型"是两件事** —— 静态扫描查不出后者。
 #    详见 `docs/decisions/TIMELINE.md`「2026-09-23 00:01」。
-# 到得了与否,按**工具接没接线**分:
-#   · `WORKER_SEARCH_*` / `WORKER_HTTP_*` → 工具已接线 ✅ 现在 `usage` 也到了
-#   · `WORKER_LIST_*` / `WORKER_READ_*`   → 工具**未接线**(等 `SUBAGENT_FILE_ROOT`),
-#     所以连 `description` 都到不了;归位只是"文案先就位",不是"已经生效"
+# 到得了与否,按**工具接没接线**分(2026-09-23 第二次订正):
+#   · `WORKER_SEARCH_*` / `WORKER_HTTP_*` → 已接线 ✅
+#   · `WORKER_LIST_*` / `WORKER_READ_*`   → **2026-09-23 也接线了** ✅
+#     (用户拍板"B可以加":`SUBAGENT_FILE_ROOT = "worker_files"`,工人多了翻/读
+#      本地文件的手)。**四件的 description / 参数说明 / usage 现在全部到达模型。**
+#     ⚠️ 接线前那两条连 `description` 都到不了 —— 因为**工具本身没进注册表**,
+#        和"usage 通道没通"是**两件不同的病**(那次归位只是"文案先就位")。
 #
-# ⏳ 仍属**阶段二**范围的是**内容本身**(这些句子写得好不好、要怎么说);结构与通道已通。
+# ⏳ 仍属**阶段二**范围的是**内容本身**(这四件的句子写得好不好、要怎么说);结构与通道已通。
 
 # web_search
 WORKER_SEARCH_DESC = (

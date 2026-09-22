@@ -2242,6 +2242,119 @@ builder 是**从外面传进去**的,core 不构造它;② 确定性?composer �
 > (`_run_worker` → `SubRunSpec` → `execute()` → `AgentLoop` → 模型,MockLLM 顶连接)。
 > **教训:测"某个零件对"不等于测"它被接上了" —— 守卫必须从入口走到底。**
 
+---
+
+### 2026-09-23 00:42 · 工人 `source` 正名 + 本地文件接线(用户:A 可以 / B 可以加)
+
+**用户原话**:
+> 「A 可以,你看就叫 subagent 还是啥,**记得别又有其他引用的地方漏改了**;
+>  只是 compact 我倒有印象,**user-edit 是个啥玩意,我完全没印象了**。」
+> 「B 可以加,不过这个也**几乎都是你操盘的,得注释一下,好让我以后记得过来 review**,
+>  它本身的作用我是认可的。」
+
+#### 一、`source` 正名:`"user"` → `"subagent"`
+
+**改了什么**:`core/subrun.py` 的 `execute()` 里 `loop.run_turn(spec.task, source=...)`
+由 `"user"` 改为 `"subagent"`。名字取 `"subagent"` —— 因为**文档里早就写的是它**
+(`SUBAGENT.md` §4.1「`subagent` 是第四个,不给值才是例外」),不是新起的名字。
+
+**为什么要正名(两条,第二条才是真的)**:
+
+1. **日志说假话** —— 工人那一轮躺在 `sessions/<sid>/subruns/<run_id>.jsonl` 里,
+   `turn/start` 与 `user/message` 都写着 `"source": "user"`,翻日志时**看起来像
+   用户亲手打的字**。而 `source` 存在的**全部意义就是记来源**。
+2. ⚠️ **认不出的 source 在记忆里是"整轮丢掉"** —— `core/memory.py` 的
+   `rows_from_events()` 只认两支:`"self"` → LIFE、`"user"`·`"user-edit"` → TALK。
+   **工人轮原先落 TALK**:一旦将来有任何"合并日志 / 让她翻自己做过什么"的路径,
+   它会被当成**用户说的话**记进记忆 —— 她回忆时会记得"主人让我去查长沙天气",
+   **而用户当时的原话只是问天气**。
+
+**所以正名的同时把一条决定写死**:「**工人轮不进记忆**」。
+今天没有任何路径把工人日志喂进记忆(记忆只读**卡自己的** `chat.log`),
+所以这条是**把巧合变成明写的决定**,不是修一个正在发生的错 —— 已在
+`core/subrun.py` 的 `execute()`、`core/memory.py` 的 `rows_from_events()` docstring、
+新测试三处写明。
+
+**"别漏改"的核查方式(用户特别提的那句)** —— 不靠印象,做两件事:
+1. **机械枚举**:全仓**所有按 `source` 分支的地方**逐个判定 `subagent` 落哪一支
+   (11 处:`loop.py` 2、`session_log.py` 2、`memory.py` 2、`composer.py` 1、
+   `store.py` 2、`engine.py` 1、`chat.py` 1)。结论:除"记忆那一支是**有意**落进丢弃"
+   外,其余**全部与 `"user"` 同支**。
+2. **行为对拍**:同一份日志内容,`source` 分别写 `"user"` 与 `"subagent"`,
+   比较 `derive_messages()` 输出 —— **逐字相同**(工人自己的上下文一个字没变)。
+
+**唯一要改的旧守卫**:`test_subagent_wiring.py` 的
+`test_subrun_turn_is_indistinguishable_from_a_chat_turn`(它**如实钉着旧现状**
+并写着"不正名")→ 已翻面为 `test_subrun_turn_is_marked_subagent_not_user`,
+加钉"记忆里不产生行"。
+⚠️ `test_subrun.py` 里那条 `assert ...source == "user"` 断的是**父日志**(父轮真的
+是真人触发的),**不受影响,没动** —— 差别在这里,别一起改。
+
+#### 二、`SUBAGENT_FILE_ROOT`:工人拿到翻/读本地文件的手
+
+**取值**:`"worker_files"`(相对 `DATA_DIR` 解析 → `data/worker_files/`)。
+目录按需创建(与 `SubRunStore.save()` 同款)。
+
+**⚠️ 这一条真正重要的不是"多了两个工具",是"把两道闸门合成一道"。**
+原来文件工具的放行有**两处判定**(params 的根 + `engine` 的硬白名单),老注释自己写着
+「必须同时改这两处:只填根 → 被硬白名单整批滤掉(**静默不生效**);只改白名单 →
+根兜到 `DATA_DIR`(**越权读用户数据**)」。
+**现在:根是唯一来源,白名单从根推导**(`_worker_allow`)—— "只改一半"结构上不可能。
+
+**⛔ 同时删掉 `SUBAGENT_FILE_ROOT or DATA_DIR` 那个兜底**(必须删)。实测对照:
+
+| 动作 | 兜底方案下 | 现在 |
+|---|---|---|
+| `read_text_file("llm.local.json")` | ✅ 读到,字段含 **`api_key`** | ❌ 拒绝 |
+| `list_files("sessions")` | ✅ 列出全部会话目录 | ❌ 拒绝 |
+| `read_text_file("sessions/<sid>/chat.log")` | ✅ 读到,**total_lines 3257** | ❌ 拒绝 |
+| `read_text_file("../llm.local.json")` | — | ❌ 拒绝(路径越界) |
+| `list_files("..")` | — | ❌ 拒绝(路径越界) |
+
+**兜底方案零报错、零症状** —— 这正是它危险的地方:任何"顺手"把文件工具写进白名单的
+改动,都会静默地把你的 API 密钥和全部聊天记录交给工人。
+
+**顺带**:这次一并解决 `TOOL_VISIBILITY.md` §4 里"**文件工具接线后归谁批**"那条旧待拍 ——
+答案是"根即闸门";仍未拍的是"要不要按轮次收窄"。
+
+#### 三、`🔎` 视觉标记(用户要求"让我记得过来 review")
+
+用户明说这一条"几乎都是你操盘的"。为此在 `server/params.py` 的图例里**新立一个标记**:
+
+```
+🔎 = 决策是用户拍的、实现细节是 AI 定的,等用户过来 review
+```
+
+打在 `params.py` 的 `SUBAGENT_FILE_ROOT` 与 `engine.py` 那段装配注释上,
+`grep 🔎` 可一次找全。**待 review 的具体三项**:① 目录名叫 `worker_files`
+(刻意避开**已摘除的"桌面工作区"** pane 的名字);② 根采用"相对 `DATA_DIR` 解析"的语义;
+③ 闸门合并的写法。
+
+#### 四、连带效应(模型可见文本变了,记一笔)
+
+工人的手从 2 件变 4 件后,**她的 `launch_subagent` 用法句自动跟着变** ——
+能力句是从真注册表推的(`_worker_capabilities()`),不需要手抄:
+
+```
+你自己做不了的事(上网查)一律派给它 …
+→ 你自己做不了的事(上网查、翻本地文件、读本地文件)一律派给它 …
+```
+
+同时工人的 `[可用工具用法]` 段**自动**从 2 条变 4 条(甲A 那条性质当场兑现:
+**新工具一接,用法段自己跟上,没人需要记得同步**)。
+⚠️ 这两处都是**模型可见文本**,虽属"机制自动产出",但用户应当知情。
+`_WORKER_LABELS` 里"翻本地文件 / 读本地文件"两条能否并成一句,属**内容层**决定,未动。
+
+#### 五、验证
+
+- **`source`**:11 处 source 分支逐个判定完毕;行为对拍 `derive_messages()` **逐字相同**;
+  12 处 `"subagent"` 引用点全部核对(全是本轮新增的注释/测试或那个唯一的落点)。
+- **文件沙箱**:根内可读(样例文件 2 行读到)✅;根外 `llm.local.json` / `sessions` **全拒** ✅;
+  `../` 越界 **全拒** ✅。
+- **回归**:`test/test_*.py` **24 个全过**;全仓 `ast.parse` 全过。
+
+
+
 
 
 
