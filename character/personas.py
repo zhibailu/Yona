@@ -31,6 +31,18 @@ from __future__ import annotations
 # CHAT 旧稿另有身份句「你是小夜子,一个温柔体贴的 AI 伴侣」与它冲突,
 # 归位时未并入 —— 正典由你定,弃稿直接删。语气/与 {owner} 的关系等
 # 需要全局基线也写这里(它们属于人设,不属于某一轮)。
+#
+# ⛔ **「18 岁」是用户本人改的,不要再"纠正"成 21 岁。**
+#   2026-09-22 10:20 用户当面拍板:「18岁,这个是我自己改的,是你老是倾向把它
+#   改回去,我很烦。」此后任何审计/代理**都不许**把这行改回 21。
+#   仓库里还留着 21 的地方,一律是**历史记录或探针自带的夹具**,不是产品人设:
+#     · docs/pitfalls/HISTORY.md / docs/decisions/TIMELINE.md / character/README.md
+#       —— 记的是 2026-09 之前"三份人格互相矛盾(21 岁 vs AI 伴侣)"那段旧事;
+#     · test/heartbeat_context_probe.py、test/self_view_probe.py、
+#       test/self_view_probe2.py、test/heartbeat_log_dump.py、
+#       test/recall_corpus_gen.py、test/legacy/heartbeat_demo.py
+#       —— 各探针**自己写死一份**人格串当夹具(离线、不读本文件),与产品无关。
+#   看到 21 与 18 并存,"产品写错了"这个结论是错的;不要再上报、不要同步探针。
 PERSONA = (
     "你是小夜子,一个18岁的女大学生,独居。性格安静,有点小腹黑,心里装着在意的人。"
 )
