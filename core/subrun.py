@@ -69,7 +69,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .llm import LLM
 from .loop import AgentLoop
@@ -116,12 +116,28 @@ class SubRunSpec:
     """一次子运行的规格 —— 派活的人只描述"做什么",不描述"你是谁"。
 
     system 必填且由内容层提供:core 不写文案(guardrail)。
-    这就是"子运行没有第二个人格"在类型上的落法 —— 它拿不到 persona,
-    只能拿到一份任务说明。
+    这就是"子运行没有第二个人格"在类型上的落法 —— core**不构造**装配,只把
+    调用方给的东西原样递给 `AgentLoop`;给什么、由谁决定,是调用方的事。
+
+    ⚠️ **`system` 是 `str | Callable` 两种形态,别按一种写。**
+    `AgentLoop.__init__` 本来两种都吃(`core/loop.py` 的 `_system_text()` 按
+    builder 的**位置参数个数**路由:1=(registry)、2=(registry, source)、
+    3=(registry, source, log))。这里在 2026-09-23 之前**只声明了 `str`** ——
+    那是一次**不该有的收窄**,后果是实打实的:
+
+      工人原先拿到的一条**静态串**,于是**整条 composer 不跑**
+      (`core/loop.py` 的 `_build_messages()` 里 `if system_prompt is not None:`
+      是**替换**不是叠加)→ 工人五天拿不到 `[可用工具用法]`,而且**零症状**
+      (`description` 走 `tools[]` 数组,与 SYSTEM 无关,所以它表现得像模像样)。
+
+    凡**跟随 registry 或轮次状态动态生成**的段,都必须走 builder ——
+    静态串表达不了"除了这几格,其余自动来",差集会自己长出来。
+    取证、根因与裁决:`docs/decisions/TIMELINE.md`「2026-09-23 00:01 · 工人
+    SYSTEM 曾经是"一条静态串"」;段清单:`docs/protocols/SUBAGENT.md` §4.2。
     """
 
     task: str  # 任务书(子运行唯一的输入,进它自己的 user 槽)
-    system: str  # 任务级 SYSTEM(内容层提供)
+    system: str | Callable[..., str]  # 任务级 SYSTEM(内容层提供):静态串或 builder
     label: str = ""  # 一行标签:队列面板显示 / 给模型的结果通知用
     tools: list | ToolRegistry | None = None  # 工具白名单(None/空 = 无工具)
     max_steps: int = 4  # 步数上限:子运行不是无底洞
@@ -354,6 +370,9 @@ def execute(
         sub_log,
         llm,
         registry,
+        # spec.system 可能是静态串,也可能是 builder —— 两种都由 AgentLoop 吃
+        # (`_system_text()` 按位置参数个数路由),这里**不许**加 isinstance 判断:
+        # 一旦在这里分叉,就等于 core 开始"理解"装配,而那正是当初收窄成 str 的心理起点。
         system_prompt=spec.system,
         max_steps=spec.max_steps,
     )

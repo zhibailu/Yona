@@ -6,6 +6,10 @@
 
   ① 在工具体里再跑一轮,为什么必须换 AgentLoop 实例?          -> 锁(硬约束)
   ② 复用装配时,SYSTEM 能不能一起复用?                        -> 不能,人格会漏
+                                             (工人用的是**自己那台** composer:
+                                              `character/persona.py` 的
+                                              `build_worker_composer`;段清单的守卫在
+                                              `test/test_worker_system.py`)
   ③ 工人轮在日志里认不认得出来?                                -> 现在认不出来
   ④ 工具注册进产品那份 module 级 registry 会怎样?              -> 重跑就炸
   ⑤ retain_result 什么时候被收集?                             -> 构造时快照
@@ -203,8 +207,17 @@ def test_persona_leaks_unless_the_subrun_overrides_system() -> None:
     是个很顺手的写法(毕竟 sys_by_source 就是"这具装配的 SYSTEM")——
     但子运行会因此**穿着小夜子的人设去干活**,而它本该是个匿名执行单元。
 
-    正解:每轮显式传 system_prompt= 任务书(core/loop.py 的 `_build_messages()` 里 `if system_prompt is not None:` 那条覆盖路径),
-    builder 根本不参与。
+    红线是**"别把父的装配给它"**,不是**"它不能有装配"**。这两句看着像,差得远:
+    后者会让工人退化成一条静态串,而那正是 2026-09-23 修掉的事故(工人五天拿不到
+    `[可用工具用法]`,且零症状 —— 见 `docs/decisions/TIMELINE.md`「2026-09-23 00:01」)。
+
+    本函数测的是**覆盖路径**:每轮显式传 `system_prompt=` 任务书
+    (`core/loop.py` 的 `_build_messages()` 里 `if system_prompt is not None:` 那条),
+    **父 builder 不被问**。
+    ⚠️ 产品现在走的**不是**这条路 —— 工人有**自己那台** composer
+    (`character/persona.py` 的 `build_worker_composer`,经 `engine._worker_system` 传进
+    `SubRunSpec.system`)。那条装配路径的守卫在 `test/test_worker_system.py`,
+    两条同时成立 = 从哪个方向都漏不出人设。
     """
     hits: list = []
     builder = make_product_builder(hits)

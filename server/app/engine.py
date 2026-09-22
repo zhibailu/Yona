@@ -27,7 +27,7 @@ from pathlib import Path
 # 本来就在顶部,所以模块加载期 llm_setup 早已被导入 —— 那句函数内 import 没有任何惰性收益。
 from .llm_setup import load_runtime, sanitize
 
-from character.persona import build_small_night_composer
+from character.persona import build_small_night_composer, build_worker_composer
 from character import personas as personas_mod  # noqa: E402 文案(内容层);装配时现取属性,
 # 不用 from-import 绑死 —— 改文案后 reload 模块 + 重建引擎即生效(2026-09)
 from character.state import CharacterState
@@ -170,6 +170,40 @@ def _worker_capabilities() -> tuple[str, ...]:
     ))
 
 
+# ---------- 工人的 SYSTEM 装配(2026-09-23 00:01,用户拍板"甲A") ----------
+# ⛔ **别把它退回成一条静态串。** 原先是 `system=SUBAGENT_SYSTEM + [步数预算]` 的
+#    拼接串,而 `core/loop.py` 的 `_build_messages()` 里 `if system_prompt is not None:`
+#    是**替换**不是叠加 —— 静态串一进来,composer 那条分支永远走不到,于是工人
+#    **五天拿不到 `[可用工具用法]`**,而且零症状(`description` 走 `tools[]` 数组,
+#    与 SYSTEM 无关,所以它用起工具来"有名字有参数",看着像模像样)。
+#    取证/根因/级别判定:`docs/decisions/TIMELINE.md`「2026-09-23 00:01」。
+#    段清单(给什么、不给什么):`docs/protocols/SUBAGENT.md` §4.2 ——
+#    **那张表当初漏了"工具用法"这一行,所以这一格五天没人核对**;加段时回去补表。
+#
+# 任务说明 = 内容层的两段文案 + **产品参数**填的 {steps}(与自走轮的
+# WAKE_BUDGET_TEMPLATE 同款:上限在 params,"怎么说"在 personas,引擎只做这一句插值)。
+_worker_task_system = (
+    personas_mod.SUBAGENT_SYSTEM
+    + "\n"
+    + personas_mod.SUBAGENT_BUDGET_TEMPLATE.format(steps=SUBAGENT_MAX_STEPS)
+)
+# 只在这里构造一次:它不依赖连接/状态,`_build_engine` 重跑也不会变
+# (registry 是**渲染时**由下面那个 builder 逐轮喂进去的,不是构造时闭包)。
+_worker_composer = build_worker_composer(_worker_task_system)
+
+
+def _worker_system(registry, source=None, log=None) -> str:
+    """工人的 SYSTEM builder —— 三参,与主循环的 `sys_by_source` **同形状**。
+
+    三参是刻意的:`core/loop.py` 的 `_system_text()` 按位置参数个数路由,
+    三参拿到的就是"本轮真正开放的那份注册表"。工人的工具用法段靠它**自动跟随
+    白名单**(`make_usage_section` 的 producer 优先读 `values["registry"]`)——
+    白名单加了工具,用法段跟着来,不需要谁记得同步。`source` / `log` 工人用不上,
+    留成可选参数是为了对齐 arity 3;写成两参也能跑,但那就少了两样本该在手边的信息。
+    """
+    return _worker_composer.compose({"registry": registry})
+
+
 def _run_worker(task: str, label: str) -> dict:
     """工人跑一次(**阻塞**);工具壳只认这一个形状 —— 给它任务、拿回事实。
 
@@ -185,16 +219,16 @@ def _run_worker(task: str, label: str) -> dict:
     record = execute_subrun(
         SubRunSpec(
             task=task,
+            # ✅ 2026-09-23 00:01 接线(用户拍板"甲A"):这里传 **builder**,不是拼好的串。
+            #    旧形态(一条 `SUBAGENT_SYSTEM + [步数预算]` 的拼接串)与它造成了什么,
+            #    记在上面 `_worker_composer` 那段 ⛔ 注释里 —— 别退回去。
             # 文案走内容层;engine 一个字都不写(server/README 「文案不在 server」)。
             # [步数预算]段由**产品参数**填 {steps} —— 上限在 params,"怎么说"在
             # personas,引擎只做这一句插值(与自走轮的 WAKE_BUDGET_TEMPLATE 同款)。
             # 不填这段的后果实测过:工人不知道步数有限,把每步都花在"再搜一次"上,
             # 撞上限时一个字没写 → failed + 空结论,白烧上百秒和几万 token。
-            system=(
-                personas_mod.SUBAGENT_SYSTEM
-                + "\n"
-                + personas_mod.SUBAGENT_BUDGET_TEMPLATE.format(steps=SUBAGENT_MAX_STEPS)
-            ),
+            # (那段文案本身没变,只是从"事先拼死"改成"装配时现取"——见 `_worker_composer`。)
+            system=_worker_system,
             label=label,
             tools=_worker_tools,
             max_steps=SUBAGENT_MAX_STEPS,

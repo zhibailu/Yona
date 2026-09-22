@@ -9,6 +9,10 @@
   5. tool usage:工具用法散文(由 make_usage_section 提供,内核通用)
 
 人格 = prompt 段落 + 状态投影,不是状态机代码。
+
+本文件有**两个装配工厂**,差异只在**段清单**、机制是同一套:
+  - `build_small_night_composer()` —— 她的三类轮(陪聊 / 自走 / 补写);
+  - `build_worker_composer()`       —— 工人(一次性执行单元);见该函数 docstring。
 """
 
 from __future__ import annotations
@@ -28,6 +32,11 @@ _SITUATION_PRIORITY = 12
 _WORLD_PRIORITY = 15
 _STATE_PRIORITY = 20
 _USAGE_PRIORITY = 30
+
+# 工人(子运行)的任务说明段:占**人设段那一格**(10)。工人的段清单里没有 persona,
+# 任务说明就是它的"最前面那一段" —— 沿用同一个数字,是让"同一个位置、不同清单"
+# 在常量表里看得见,不是与 persona 共享值。
+_WORKER_TASK_PRIORITY = 10
 
 # 星期名(中文,按 time.localtime 的 tm_wday 0=周一)
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -135,4 +144,47 @@ def build_small_night_composer(
     composer.register(make_usage_section(registry, priority=_USAGE_PRIORITY))
     for sec in extra_sections or []:
         composer.register(sec)
+    return composer
+
+
+def build_worker_composer(task_system: str) -> SystemComposer:
+    """工人(一次性执行单元)的 SYSTEM 装配 —— **同一套机制,另一份段清单**。
+
+    为什么需要它(而不是直接用静态串):`server/app/engine.py` 原先把
+    `SUBAGENT_SYSTEM + [步数预算]` 拼成**一条字符串**递给 `SubRunSpec.system`,
+    而 `core/loop.py` 的 `_build_messages()` 里 `if system_prompt is not None:`
+    是**替换**不是叠加 —— 于是 **composer 整条不跑**。后果:工人五天拿不到
+    `[可用工具用法]`,而且**零症状**(`description` 走 `tools[]` 数组,与 SYSTEM
+    无关,所以它用起工具来"有名字有参数",看着像模像样)。取证与裁决见
+    `docs/decisions/TIMELINE.md`「2026-09-23 00:01」;段清单见
+    `docs/protocols/SUBAGENT.md` §4.2。
+
+    **段清单(只有两段,别照抄主循环那份)**:
+
+      1. 任务说明 —— 静态,`producer` **原样输出**,不走插值;
+      2. 工具用法 —— 跟随**本轮注册表**渲染(这是它能自动跟上白名单的原因)。
+
+    **不给的段**:persona / 情境 / 世界 / 状态 / 时间线 —— 前四者的判据在
+    §4.2(世界段 2026-09-23 已拍:噪音太大,不进),时间线对工人无意义。
+
+    ⚠️ **任务说明必须走 `producer`(原样)而不是 `template`(插值)**:它内部可能
+    出现 `{` 之类的字面量(`SUBAGENT_BUDGET_TEMPLATE` 的 `{steps}` 是**上游
+    已经填好**才传进来的,不是留给这里插的)。`template` 通道会对整段做
+    `interpolate`,一旦有未登记的 `{变量}` 就会漏进 SYSTEM —— 这就是
+    `core/composer.py` 里 `producer` 与 `template` 两条通道的区别,踩过的坑见
+    `docs/decisions/TRAPS.md` 二.2 那一族(称呼被写死在同一机理上)。
+
+    工具用法段传 `registry=None` 是**有意**的:`make_usage_section` 的 producer
+    优先取 `values["registry"]`(= 本轮真正开放的那份白名单),没给才退回闭包值。
+    这样白名单一变,用法段**自动跟着变**,不需要谁记得同步。
+    """
+    composer = SystemComposer()
+    composer.register(
+        SystemSection(
+            name="worker_task",
+            priority=_WORKER_TASK_PRIORITY,
+            producer=lambda _values: task_system.strip() or None,
+        )
+    )
+    composer.register(make_usage_section(priority=_USAGE_PRIORITY))
     return composer

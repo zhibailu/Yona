@@ -2,6 +2,14 @@
 
 为什么需要它:单元测试要测循环的停止/兜底/错误分支,
 不能真去调 API(离线、确定、不花钱)。
+
+⚠️ **签名必须与 `core/llm.py` 的 `LLM` 协议对齐**(含三个可选覆盖参数)。
+    原先只写了 `(messages, tools)` 两个 —— 那时没有测试从"带覆盖参数的真实路径"
+    进来,所以看不出来。2026-09-23 补 `temperature / max_tokens / model`:
+    工人那条路(`engine._run_worker`)会传 `max_tokens=SUBAGENT_OUTPUT_MAX_TOKENS`,
+    替身签名不全就会**抛在 stream() 里**,被 `execute()` 收成
+    `failed / error: MockLLM.stream() got an unexpected keyword argument` ——
+    症状像"工人跑挂了",其实是测试替身不忠实。
 """
 
 from __future__ import annotations
@@ -31,6 +39,9 @@ class MockLLM:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model: str | None = None,
     ) -> AssistantOutput:
         self.seen_messages.append(messages)
         self.seen_tools.append(tools)
@@ -42,6 +53,9 @@ class MockLLM:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model: str | None = None,
     ):
         """把剧本输出转成 chunk 流(与真实客户端同形状)。"""
         self.seen_messages.append(messages)

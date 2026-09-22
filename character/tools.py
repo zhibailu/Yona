@@ -622,7 +622,21 @@ def make_recall_tool(
 #
 # ⚠️ **改文案只改这里**。`server/app/worker_tools.py` 里不许再出现裸串 ——
 #    一旦两边各写一份,就会走 `TRAPS.md` 二.2 那条老路(手抄多份必然漂移)。
-# ⏳ 这批文案属**阶段二**范围(工具文案逐条打磨),现在只做归位、一字未改。
+#
+# ✅ **2026-09-23 00:01:这批 `usage` 现在真的到达工人了**(订正下面那条过时注解)。
+#    原先这里写着"⏳ 属阶段二范围,现在只做归位" —— 那句话**把 4 条 usage 整体
+#    升格成了"等着打磨的素材",但其中 2 条(web_search / http_get,即**已接线**的
+#    那两个)当时**根本到不了模型**:工人的 SYSTEM 是一条静态串,composer 不跑,
+#    `[可用工具用法]` 段从来没被渲染过(五天,零症状)。
+#    修法:`character/persona.py` 的 `build_worker_composer()` + `engine._worker_system`
+#    (用户拍板"甲A")。**"有人读"和"到了模型"是两件事** —— 静态扫描查不出后者。
+#    详见 `docs/decisions/TIMELINE.md`「2026-09-23 00:01」。
+# 到得了与否,按**工具接没接线**分:
+#   · `WORKER_SEARCH_*` / `WORKER_HTTP_*` → 工具已接线 ✅ 现在 `usage` 也到了
+#   · `WORKER_LIST_*` / `WORKER_READ_*`   → 工具**未接线**(等 `SUBAGENT_FILE_ROOT`),
+#     所以连 `description` 都到不了;归位只是"文案先就位",不是"已经生效"
+#
+# ⏳ 仍属**阶段二**范围的是**内容本身**(这些句子写得好不好、要怎么说);结构与通道已通。
 
 # web_search
 WORKER_SEARCH_DESC = (
