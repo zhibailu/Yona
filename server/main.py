@@ -305,22 +305,49 @@ async def update_message(msg_id: int, body: MessageUpdate):
 async def pulse_autonomy():
     """手动触发一次自走轮:她独处想/做一轮,写给"最近激活的卡"(Yona 兜底)。
 
-    2026-09 每卡 life:不再有匿名生活会话 —— 目标卡 = store.life_target。
+    ⛔ **未启用 / 待砍(2026-09-22 10:20 用户拍板,别当活功能看)。**
 
-    ⚠ 三个**自走入口**必须都做同样两件事(2026-09 清理时对齐,**行为变更**):
-        self 心跳自走 = engine.LifeLoop.run_turn(engine.py 的 `mark_self()` 调用)
-        离线补写      = engine._maybe_backfill_life._card_job(engine.py)
-        手动脉冲      = 本函数(下面 _job)
+    用户原话:「脉冲我还是没听懂,因为我 rewrite 里根本没有操刀过这一处,如果只是
+    顺手搬过来的,那出问题就不奇怪了,因为现在的触发条件和以前完全不一样了,以前的
+    脉冲根本没有什么准入门槛。标注掉吧,不启用,绑了 UI 的地方也标注掉,甚至我后面
+    可能会把它整个砍掉,否则大概率要开很多特权才复活得了它。」
+
+    事实核对(与用户判断一致):
+      · 这个端点是 **baseline 就搬进来的旧物**(`git log -S'/autonomy/pulse'`
+        第一个 commit 就是 `2903b2a chore: baseline`),**不是 rewrite 里长出来的**;
+      · 旧 Yona 的脉冲=按需手动戳一下,没有准入门槛;而现在自走轮这一套已经有
+        **闸门 / 时间预算 / 补写 / 冷却 / 队列优先级**,脉冲**一个都没接**。
+        它只是被顺手塞进 `_submit_turn`,旧语义与新机制不是一套东西;
+      · 所以**别拿它当"真 bug"报**。2026-09-22 清理时补的 `sid=sid` + `mark_self()`
+        只是让它在现有机制下"不至于静默跑错卡",**不代表这功能被承认**。
+
+    **现状:标注,不摘。** 端点仍通、UI 按钮仍在(用户要的是"标注掉",不是删)。
+    **允许的两种终局**(由用户定,别人不要自己动):
+      ① 整个砍掉 —— 摘 UI 按钮 + 删本端点 + `engine.py` 里
+         `LifeLoop` / `_maybe_backfill_life` 是不受影响的(它们各走各的入口);
+      ② 复活 —— 那就要先把自走轮的门槛补齐(闸门 / 时间预算 / 冷却 / 与心跳的
+         `mark_self` 关系),否则它会绕过所有准入规则,行为与心跳自走轮不同源。
+        这也是用户说的"大概率要开很多特权"。
+
+    ⚠️ 下面这段是留给终局 ② 的笔记("**假如**它真被复活,要遵守什么规则"),
+    **不是**当前生效说明:
+
+      2026-09 每卡 life:不再有匿名生活会话 —— 目标卡 = `store.life_target`。
+      三个**自走入口**必须都做同样两件事:
+        self 心跳自走 = `engine.LifeLoop`(`engine.py` 的 `mark_self()` 调用)
+        离线补写      = `engine._maybe_backfill_life`(`engine.py`)
+        手动脉冲      = 本函数
       两件事:(a) `_submit_turn(..., sid=sid)` —— 告诉 worker"这一项是哪张卡";
              (b) 跑完 `mark_self()` —— 让这一轮进心跳冷却。
-      **少 (a) 的症状**(就是本端点在 2026-09 清理前的老毛病):worker 里
-      `_recall_sid["sid"]` = None → `recall_index()`(engine.py 直接
-      `if sid is None ... return None`)回 None → recall 工具给模型的事实是
-      "检索没跑起来",于是**她会开口说自己一时想不起来**,而真相只是引擎不知道
-      翻哪张卡;同时 worker 的 `if sid is not None`(engine.py)跳过
-      memory_sync,脉冲产出的生活事件不进索引(下一次也检索不到)。
+      **少 (a) 的症状**:worker 里 `_recall_sid["sid"]` = None →
+      `recall_index()`(`engine.py` 的 `if sid is None ... return None`)回 None →
+      recall 工具给模型的事实是"检索没跑起来",于是**她会开口说一时想不起来**,
+      而真相只是引擎不知道翻哪张卡;同时 worker 的 `if sid is not None` 跳过
+      `memory_sync`,脉冲产出的生活事件不进索引(下一次也检索不到)。
       **少 (b) 的症状**:脉冲跑完不进冷却 → 心跳会在几秒后再自走一轮,节奏衔接断。
-    """
+      这两条 2026-09-22 清理时已按上面对齐(行为变更)—— 但见最上面的 ⛔:
+      **这不让脉冲变成"被承认的功能"**。
+    """  # noqa: D401
     if engine._loop is None:
         raise HTTPException(status_code=503, detail="引擎未启动")
     sid = engine.life_session_id()

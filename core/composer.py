@@ -203,6 +203,7 @@ def make_timeline_section(
     now_epoch=None,
     priority: int = 16,
     name: str = "timeline",
+    timeline_template: str = "[时间线] 距上次和{owner}说话: {gap}",
 ) -> SystemSection:
     """会话时间线段:距上次真人互动多久(派生自日志,不是额外状态)。
 
@@ -218,44 +219,29 @@ def make_timeline_section(
         同一只钟与世界 section 一致(注入"当前时间"时两段不打架)。
     now_epoch 缺省 = 系统时钟。
 
-    ⏸ **越界遗留(第 2/3 与 3/3 处):本段的两处模型可见文案也写在内核里。**
-    (2026-09 清理时如实标注,**不搬** —— 搬会改模型可见文本。)
+    **句子文案归位(2026-09-22 10:20 用户拍板):`timeline_template` 是形参,
+    产品装配传 `character/personas.py` 的 `TIMELINE_TEMPLATE`。**
+    形参默认值与产品现串**逐字相同**,所以不传也得到一样的输出;
+    但**改文案要去内容层改**,别在这里改(这里那份只是兜底默认值)。
 
-    ① 现状,两处:
-       (a) `_fmt()` 里那四个时间说法 —— `"刚刚"` / `f"{...} 分钟前"` /
-           `f"{...} 小时前"` / `f"{...} 天前"`(含它们各自的取整规则);
-       (b) `_timeline_text` 末尾那行 `f"[时间线] 距上次和主人说话: {_fmt(gap)}"`
-           —— 整句都在 core,**连换行/空格/冒号都算**。
-       判例同上(第 1 处标注里引的 `character/personas.py` 的
-       `WAKE_BUDGET_TEMPLATE`「曾写死在 producer 里 → 归位」那段):
-       同类的句子已经归位,这两处是**漏网的例外**。
-       ⚠️ **`"主人"` 是把 `VALUES["owner"]` 抄死了。** 关键差别在于:
-       **producer 通道不插值** —— `interpolate()` 只作用在 `template` 上,
-       `producer` 的返回值是**原样出段**的。所以这里写死"主人"之后,
-       内容层改 `VALUES["owner"]`(改称呼)**不会**影响这一句 ——
-       改称呼必须**回来改 core**。这正是"文案住在内容层"这条边界要防的事
-       (`character/personas.py` 的 `VALUES = {"owner": "主人"}` 才是它该取值的地方)。
-    ② 将来要搬,动哪几行、内容层加什么常量:
-       - `composer.py`:(a) `_fmt` 整个函数(四个分支的字符串);
-         (b) `_timeline_text` 的 return 一行。
-       - `character/personas.py`:新增常量,建议两个 ——
-         `TIMELINE_TEMPLATE = "[时间线] 距上次和主人说话: {gap}"`(**字符串里把
-         "主人"替换成 `{owner}`,让它走 `VALUES["owner"]`**)与一组时长说法
-         (如 `TIMELINE_JUST_NOW` / `_MINUTES` / `_HOURS` / `_DAYS` 四个模板,
-         或一个 `(上限秒数, 模板)` 的表)。放系统口吻区。
-       - 接线:与第 1 处同款 —— 经 `make_timeline_section(...)` 传入,
-         或给本函数加带现串默认值的形参。⚠️ 若走 `{owner}` 插值,
-         **`_timeline_text` 是 producer,不会自动插值** —— 必须自己调
-         `interpolate(TIMELINE_TEMPLATE, values)`,否则 `{owner}` 会原样
-         出现在 SYSTEM 里(那比抄死更坏)。
-       - 连带:`docs/pitfalls/HISTORY.md` 那条「[时间预算] 句子写死在 engine」
-         的同类条目可以补一条;`docs/public/ARCHITECTURE.md:175` 的更正也要改。
-    ③ **默认值必须与现串逐字相同**:
-       `"[时间线] 距上次和主人说话: {gap}"`(方括号、全角冒号 `:`,
-       逗号后**一个**空格),以及 `"刚刚"` / `" 分钟前"` / `" 小时前"` /
-       `" 天前"`(数字与单位之间**一个**空格)。
+    ⚠️ **称呼走 `VALUES["owner"]`,唯一来源。** 这里自己调 `interpolate()`
+    —— 本函数是 **producer 通道,返回值原样出段,`SystemComposer` 不会替你插值**。
+    归位前"主人"两个字是写死在下面那行 return 里的,后果:改 `VALUES["owner"]`
+    只改得动走 template 的人设/情境段,[时间线] 一个字不变 —— 半改状态,
+    且只有回内核改字才能修。用户原话:「固定的都是坑,来源只有 VALUES」。
+
+    ⏸ **剩下两处文案仍在内核**(2026-09-22 如实标注,暂不搬):
+      ① `_fmt()` 里的四个时间说法 —— `"刚刚"` / `f"{...} 分钟前"` /
+         `f"{...} 小时前"` / `f"{...} 天前"`(含各自的取整规则)。
+         它们**不是称呼**,不来自 `VALUES`,所以没有"改一处就够"的问题;
+         搬不搬是口味 + 分层洁癖问题,等用户定(已登记 `docs/tasks/OPEN.md`)。
+      ② 段标题 `"[可用工具用法]"`(见本文件 `make_usage_section()`)同理。
+      搬的时候语气/措辞会动模型可见文本,属产品决策,所以不顺手做。
+
+    ③ **默认值必须与现串逐字相同**:`"[时间线] 距上次和{owner}说话: {gap}"`
+       (方括号、全角冒号 `:`,逗号后**一个**空格),以及 `_fmt()` 里
+       `"刚刚"` / `" 分钟前"` / `" 小时前"` / `" 天前"`(数字与单位之间**一个**空格)。
        差一个空格都会改掉所有轮次的 SYSTEM —— 本段每轮都进上下文。
-       搬完必须逐字节对拍。
     """
 
     def _last_user_epoch(lg) -> float | None:
@@ -312,6 +298,12 @@ def make_timeline_section(
         else:
             ts = float(now)
         gap = max(0.0, ts - last)
-        return f"[时间线] 距上次和主人说话: {_fmt(gap)}"
+        # ⚠️ **必须自己插值** —— 本函数是 producer 通道,`render()` 直接把返回值
+        # 当段文本用,不会走 `interpolate`(那条只作用在 `template` 上)。
+        # `{owner}` 的取值来源只有 `values["owner"]`(产品路径 = personas.VALUES);
+        # 值里没有 "owner" 键时 `interpolate` 原样保留 `{owner}` —— 那会在 SYSTEM 里
+        # 露出一串花括号。这是**故意选的可观测兜底**(不炸整个 turn),不是静默兜底:
+        # 装配处漏给 owner 时,肉眼在调试面板立刻能看见。
+        return interpolate(timeline_template, {**values, "gap": _fmt(gap)})
 
     return SystemSection(name=name, priority=priority, producer=_timeline_text)

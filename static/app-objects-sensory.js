@@ -850,6 +850,15 @@
             _setStageTraceText('你把刚才那件东西从桌面上收走了。');
         }
 
+        // ⛔ 未启用 / 待砍(2026-09-22 10:20 用户拍板)—— 别当活功能看。
+        //    后端 /autonomy/pulse(server/main.py)是 baseline 搬来的旧物,不是 rewrite
+        //    长出来的;旧 Yona 的手动脉冲没有准入门槛,现在的自走轮已有闸门/时间预算/
+        //    冷却/队列优先级,它一个都没接。用户原话:「标注掉吧,不启用,绑了 UI 的地方
+        //    也标注掉,甚至我后面可能会把它整个砍掉」。
+        //    终局:① 砍掉 = 删本函数 + index.html 那个按钮 + 后端端点;
+        //          ② 复活 = 先补齐自走轮门槛(否则绕过全部准入规则)。
+        //    下面的 `_setStage*` / `_watchForNewObject` 还引着物件舞台那套冻结代码
+        //    (UI 入口已撤),真复活时这段要一起重写。
         async function pulseAutonomy() {
             _setStageStatus('她自己醒来了一下。', 'thinking');
             _setStageTraceText('正在让她跑一次自主脉冲。');

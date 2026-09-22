@@ -1009,7 +1009,14 @@ def _build_engine(cfg: dict | None = None) -> None:
     # VISION 决策 8:世界=绝对时间,时间线=相对时间(距上次真人互动多久)。
     # 段在构造时不闭包 log —— compose 时经 values["log"]/["now_epoch"] 现给
     # (同一只钟,与 world 不打架);没跟真人说过话时该段自然不出现。
-    timeline_section = make_timeline_section()
+    #
+    # timeline_template **从内容层传**:句子(含 `{owner}`)住在 personas;
+    # 这个函数是 producer 通道,自己不插值,所以模板必须带 `{owner}` 占位、
+    # 由 `make_timeline_section` 内部显式 interpolate(见那边的注释)。
+    # 用户拍板(2026-09-22):称呼的唯一来源是 personas.VALUES["owner"],
+    # 内核不许写死 —— "固定的都是坑"。改句子/改称呼都只动 personas。
+    timeline_section = make_timeline_section(
+        timeline_template=personas_mod.TIMELINE_TEMPLATE)
 
     def _wake_budget_text(values) -> str | None:
         """普通轮时间预算(2026-09 用户拍板:自走/心跳/脉冲与补写同一事件算法,
@@ -1027,8 +1034,8 @@ def _build_engine(cfg: dict | None = None) -> None:
     wake_budget_section = SystemSection(
         name="wake_budget", priority=17, producer=_wake_budget_text)
 
-    # 陪聊轮 = 主人正在跟她说话:只给世界时刻([当前时间]),**不挂 [时间线]**
-    # —— 那是独处轮(自走/补写)看的:她一个人待着才需要"距上次和主人说话
+    # 陪聊轮 = {owner} 正在跟她说话:只给世界时刻([当前时间]),**不挂 [时间线]**
+    # —— 那是独处轮(自走/补写)看的:她一个人待着才需要"距上次和{owner}说话
     # 多久"。正在聊天时组这条是噪音(2026-09 用户指出修正)。
     chat_composer = build_small_night_composer(
         personas_mod.PERSONA, _state, _tools,

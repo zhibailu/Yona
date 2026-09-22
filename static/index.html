@@ -39,7 +39,14 @@
                 <h3 onclick="this.parentElement.classList.toggle('collapsed')">Yona 的工作区 <span class="chev">▼</span></h3>
                 <div class="workspace-summary" id="workspace-summary"></div>
                 <div class="workspace-actions">
-                    <button onclick="pulseAutonomy()" title="让她自己动一轮">
+                    <!-- ⛔「脉冲」按钮 = 未启用 / 待砍(2026-09-22 10:20 用户拍板)。
+                         后端 /autonomy/pulse(server/main.py)是 baseline 搬来的旧物:
+                         旧 Yona 的手动脉冲没有准入门槛,而现在的自走轮已有闸门/时间预算/
+                         冷却/队列优先级,它一个都没接。用户原话:「标注掉吧,不启用……
+                         甚至我后面可能会把它整个砍掉」。**别当活功能看、别为它写测试。**
+                         终局二选一:① 砍掉 = 删本按钮 + 删那个端点;② 复活 = 先把自走轮
+                         的门槛补齐(否则它绕过全部准入规则)。详见 server/main.py 的 ⛔ 块。 -->
+                    <button onclick="pulseAutonomy()" title="让她自己动一轮（未启用/待砍，见源码注释）">
                         <i data-lucide="sparkles" style="width:12px;height:12px"></i> 脉冲
                     </button>
                     <button onclick="_refreshWorkspace()" title="刷新工作区">
