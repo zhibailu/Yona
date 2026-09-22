@@ -30,11 +30,25 @@
                     <button onclick="fetch(_imgUrl('avatar_ai'),{method:'DELETE'}).catch(()=>{});location.reload()"><i data-lucide="undo-2" style="width:13px;height:13px"></i> 恢复默认</button>
                 </div>
             </div>
+            <!-- ⛔「生活事件」pane = 用户判定**不留**(2026-09-22 10:45)。
+                 数据来自 /admin/life-events(server/app/api/view.py),
+                 整条接法是 baseline 搬来的旧 UI 配套,不是 rewrite 设计的产品面。
+                 用户原话:「你之前说的动过的部分其实都是你自己写文档的时候顺手的,
+                 并不是我真的操刀过这一盘……所以项1 应该是不留,且文档有擅自成分,得改」。
+                 **别当活产品面看、别为它补功能。** 摘除 = 删本 pane + 那个端点
+                 + app-presets.js 里 _refreshInnerLife()(⚠️ 预设 CRUD 要留)。
+                 详见 server/app/api/view.py 的模块头。 -->
             <div class="inner-life" id="inner-life">
                 <h3 onclick="this.parentElement.classList.toggle('collapsed')"><span id="feed-title">生活事件</span> <span class="chev">▼</span></h3>
                 <div class="feed-mood" id="feed-mood"></div>
                 <div class="feed-list" id="feed-list"></div>
             </div>
+            <!-- ⛔「Yona 的工作区」pane = 用户判定**不留**(2026-09-22 10:45),
+                 同款理由:数据来自 /workspace,接法是 baseline 的旧配套。
+                 ⚠️ 里面唯一**已拍板**的东西是 2026-09 的"内心跟随当前卡" ——
+                 但那条改的是**目标卡选择**(自走/补写打哪张卡),不是"要不要有这个面板";
+                 上一轮把后者当成用户意图,是我写文档时擅自加的,已改正。
+                 摘除 = 删本 pane + /workspace 端点 + app-objects-sensory.js 的拉取。 -->
             <div class="inner-life" id="object-drawer">
                 <h3 onclick="this.parentElement.classList.toggle('collapsed')">Yona 的工作区 <span class="chev">▼</span></h3>
                 <div class="workspace-summary" id="workspace-summary"></div>

@@ -408,8 +408,16 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 
 ## 8. 明确挂起(本窗不碰)
 
-弱模型档位 · run store 保留策略 · 重试 · 优先级 · 截止时间 · UI 面板 ·
-子会话持久化 / 冷恢复 · 子运行再派子运行(含深度守卫)。
+弱模型档位 · 重试 · 优先级 · 截止时间 · UI 面板 · 子会话持久化 / 冷恢复 ·
+子运行再派子运行(含深度守卫)。
+
+> ✅ 【2026-09-22 10:45 划掉一项】**`run store 保留策略` 不再是挂起项。**
+> 用户拍板"自运行时单独日志,**要留日志**",并给出隔离诉求:「最先的诉求是**日志要隔离开**,
+> 同族的就放一起,不要同目录等级下有不同会话的主日志又有各自的 subagent」。
+> → 轨迹仓取**卡的目录** `sessions/<sid>/subruns/`,于是它**跟卡同生共死**:
+> `store.delete_session()` 把整袋移进 `archive/<ts>-<sid>/`,不需要另立保留规则,
+> 也不会在 `data/` 下积一个只增不减的目录。**"留多久、谁清"这个问题自动消失了。**
+> 接线落点:见 §9 与 `server/app/engine.py` 的 `_subrun_store_for()`。
 
 ---
 
@@ -418,10 +426,10 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 | 路径 | 状态 |
 |---|---|
 | `core/subrun.py` | **执行器(已毕业进内核)** —— 只 import core 四个原语 |
-| `server/app/worker_tools.py` | **工人的手(已毕业进产品层)** —— 四个只读工具;文件工具因沙箱根未拍不接线 |
-| `character/tools.py` | 委派工具文案 + 工厂(能力句由工人工具集**生成**) |
-| `character/personas.py` | `SUBAGENT_SYSTEM`(工人的任务说明) |
-| `server/app/engine.py` | 装配 + 接线(runner / 能力表 / 晚绑定 llm) |
+| `server/app/worker_tools.py` | **工人的手(已毕业进产品层)** —— 四个只读工具 + 沙箱 + 错误池;文件工具因沙箱根未拍不接线。⚠️ **本文件只剩实现** —— 模型可见文案(4 个 `description` + 4 个 `usage` + 11 条参数说明)2026-09-22 已归位到 `character/tools.py` 的 `WORKER_*` 常量(见下面"文案归位"一条) |
+| `character/tools.py` | 委派工具文案 + 工厂(能力句由工人工具集**生成**)+ **工人工具的全部模型可见文案**(`WORKER_*`) |
+| `character/personas.py` | `SUBAGENT_SYSTEM`(工人的任务说明)、`SUBAGENT_BUDGET_TEMPLATE`(步数预算) |
+| `server/app/engine.py` | 装配 + 接线(runner / 能力表 / 晚绑定 llm / **子运行轨迹仓**) |
 | `server/params.py` | 三个 `SUBAGENT_*` 参数,全 ⏳ |
 | `test/lab/scheduler.py` | 队列(**仍未收口,未毕业**) |
 | `test/subrun_probe.py` | 探针:`py test/subrun_probe.py [--real]` |
@@ -432,6 +440,52 @@ source="subagent"   → 任务级 SYSTEM,无 persona、无情境段、白名单�
 **毕业时定下来的三条装配约束**(实测,见 `test/test_subagent_wiring.py`):
 工具在模块加载时注册一次 + llm 晚绑定;注册必须早于 `_loop` 构造(retain 快照);
 子运行 SYSTEM 走每轮覆盖,绝不把 `sys_by_source` 递进去(否则穿上她的人设)。
+
+### 9.1 ✅ 子运行轨迹落盘(2026-09-22 接线)
+
+**落点**:`sessions/<sid>/subruns/<run_id>.jsonl`(一跑一个)。
+装配处 = `server/app/engine.py` 的 `_subrun_store_for(sid)` 与 `_sid_now()`;
+路径由 `server/store.py` 的 `subruns_dir(sid)` 算(与 `images_dir` 同款)。
+
+**用户拍板原话**:
+> 「自运行时单独日志,**要留日志**」「我在想让一个会话里的配置要不要都放同一个目录……
+>  但可能动的刀子比较大,所以最先的诉求是**日志要隔离开,同族的就放一起**,
+>  不要同目录等级下有不同会话的主日志又有各自的 subagent,管理和回看会很乱」
+
+**三条直接结论**:
+1. 一张卡的**全部日志同族同处**:`chat.log`(她和你)+ `subruns/*.jsonl`(工人)
+   + `meta.json`(快照)+ `images/` 都在 `sessions/<sid>/` 一层里;
+2. **不另开 `data/subruns/` 那种全局平铺目录**(那正是"乱"的定义:
+   所有卡的工人日志挤在一层,只能靠 run_id 猜是哪张卡的);
+3. **清理策略不用另立** —— 跟卡同生共死(见 §8 的更正块)。
+
+**同时接了 `parent`**(血缘 = 派活那一刻正在跑的那张卡)。两者是"一件事的两半":
+没有 store,血缘 id 记了也没地方查;没有 parent,有了文件也不知道是谁的。
+
+⚠️ sid 拿不到时(工人在实验台/探针里跑)**不落盘** —— 宁可不写,
+也不要写到一个猜出来的卡目录里。所以探针仍然走 `store=STORE`/`store=None` 的老路。
+
+**仍未做**(属用户"刀子比较大"的那部分,别自己动):一个会话的**配置**是否也收进
+同一目录 + **快照统一 yaml 管理**(现在是 `meta.json`,预设仍是全局的)。
+用户原话:"可能动的刀子比较大" —— 所以本轮**只做了日志隔离**。
+
+### 9.2 ✅ 工人工具文案归位(2026-09-22)
+
+**`description` / `usage` / 参数说明一律住内容层**(`character/tools.py` 的 `WORKER_*`),
+`server/app/worker_tools.py` 只 import。15 条常量,搬移**逐字未改**
+(对拍:同一 `make_read_only_tools(root=".")` 在改前/改后渲染出的
+`description`/`usage`/参数说明**完全相同**)。
+
+**依据是已有的成文规矩**(用户 2026-09-22 提醒"我记得是一种工具分层思想的"时确认):
+- `docs/README.md`「内容层文案 = `character/personas.py` + `character/tools.py`
+  (**每个工具的 `description` / `usage` —— 也是内容层,别漏**)」;
+- `docs/decisions/TRAPS.md` 二.2「**内容层文案只有一处来源**」(手抄多份必然漂移);
+- 判例:`WAKE_BUDGET_TEMPLATE` 曾写死在 producer 里 → 归位到 `personas.py`。
+
+⚠️ **"工具分层"与"文案归内容层"是两件事,别混**:
+前者说的是**工具分两层**(她的工具 ↔ 工人的手,判据见 §3.3 四条轴);
+后者说的是**文案住哪**(内容层)。`worker_tools.py` 作为"工人的手"
+**继续留在产品层**(网络与文件 IO,不是纯逻辑,见文件头)—— 变的只是文案的来源。
 
 **仍未收口**(§7 六条 + 失败契约)不影响已落地的部分 —— 契约变的是结算语义,
 不是这三个位置。

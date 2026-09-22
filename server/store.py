@@ -74,6 +74,30 @@ class SessionStore:
         """会话图片目录(sessions/<sid>/images/),媒体层用它存取。"""
         return self._sid_dir(session_id) / "images"
 
+    def subruns_dir(self, session_id: str) -> Path:
+        """工人(子运行)轨迹目录(sessions/<sid>/subruns/),一跑一个 jsonl。
+
+        2026-09-22 用户拍板:**日志隔离,同族的就放一起** ——
+        「不要同目录等级下有不同会话的主日志又有各自的 subagent,管理和回看会很乱」。
+
+        → 一张卡的全部日志都在**它自己的目录**里,同一个层级:
+            sessions/<sid>/chat.log          主日志(她和你)
+            sessions/<sid>/subruns/<run>.jsonl  工人轨迹(她派出去的那次活)
+            sessions/<sid>/meta.json         这张卡的快照(人设/预设)
+            sessions/<sid>/images/           图片
+
+        ⚠️ 三个连带结论,别漏:
+          ① **不要**另开 `data/subruns/` 那种全局平铺目录 —— 那正是用户说的"乱":
+             所有卡的工人日志挤在一层,只能靠 run_id 猜是哪张卡的。
+          ② **清理策略不需要另立**:工人日志跟卡同生共死 —— `delete_session()`
+             把 `sessions/<sid>/` 整袋搬进 `archive/<ts>-<sid>/`,它们自然跟着走。
+             (这是它跟 `cache/` 里那些"派生可重建"产物不同的地方:轨迹是**证据**,
+             不可重建,所以既不进 `cache/` 也不该被随手清。)
+          ③ 目录**按需创建**:`SubRunStore.save()` 自己 `mkdir(parents=True)`,
+             这里只算路径 —— 跟 `images_dir()` 同款(读路径不产生写副作用)。
+        """
+        return self._sid_dir(session_id) / "subruns"
+
     def _migrate_legacy_layout(self) -> None:
         """旧平铺布局 → 目录制(一次性;只搬得动就搬,搬不动忽略)。"""
         # 1) 旧的根级 *.log / *.meta.json(平铺):_life.log 按拍板丢弃
@@ -209,9 +233,33 @@ class SessionStore:
         return best
 
     def _has_user_talk(self, session_id: str) -> bool:
+        """这张卡上**还看得见**的真人消息,一条都没有吗?
+
+        2026-09-22 10:45 用户拍板(口径原话):
+        「如果是说当前会话 0 消息了的话,**应该是整个对应日志归档,会被补写等过滤掉,
+          当然不继续补东西,就是死掉了**。」
+
+        → 判据 = **可见消息**(排 shadow),**不是原始事件**。
+        原来扫的是原始事件 → 你把某张卡的消息全删了,它仍被判"有真人说过话",
+        于是继续被选为自走目标(`life_target()`)与补写目标(`life_backfill_order()`),
+        她继续往一张你已经清空的卡里写生活。
+        而其它三处投影**全都跳 shadow**(`core/session_log.py` 的 `derive_messages`、
+        `store._messages_view`、`server/app/api/view.py` 的两个投影函数)——
+        同一件事四个地方三个口径,这里收齐。
+
+        ⚠️ 两种"清空"不是一回事,别混:
+          · `delete_messages_from()` = **tail-cut shadow** —— 日志原文一字不动,只追加
+            一条 `surface/shadow` 注解。全删光 → 所有 seq 被盖住 → 这里返 False
+            → 这张卡**死掉**(不再被补写/自走选中),但**日志还在盘上**。
+          · `delete_session()` = **整袋归档**(`archive/<ts>-<sid>/`)—— 连日志一起搬走。
+        用户要的终局是归档那份;这里只管**判据**:"看不见真人说过话的卡 = 死"。"""
+        log = self._load_log(session_id)
+        shadowed = log.shadowed_seqs()
         return any(
-            e.type == "user/message" and e.data.get("source") == "user"
-            for e in self._load_log(session_id).events
+            e.type == "user/message"
+            and e.data.get("source") == "user"
+            and e.seq not in shadowed
+            for e in log.events
         )
 
     def life_backfill_order(self) -> list[str]:

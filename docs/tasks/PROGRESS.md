@@ -15,6 +15,10 @@
   ~~原写 24~~ —— 那是 09-05 的数,之后加了 LLM 配置向导与记忆相关端点。
   契约与旧 UI 对齐;聊天 SSE(token/tool_status/busy/done)、治理(shadow/replace)、
   观测(workspace/life-events/runtime)、图片/背景、会话 CRUD。
+  > ⛔ 【2026-09-22 10:45 更正】把 `workspace / life-events` 与 runtime 并列成"观测面",
+  > 读起来像它们是 rewrite 的产品交付面 —— 这层分量**是擅自加的**。**用户 2026-09-22 10:45
+  > 判定内心活动(life-events)与桌面(workspace)两个面板不留**,现状**标注待砍、不摘**
+  > (本次判定只点名这两个面板)。详见 `server/app/api/view.py` 的模块头。
 - **测试**:**23 个** `test/test_*.py`(2026-09-21 实测),Mock + 真模型双路可跑。
   ~~原写 12~~;本文件下方两处 ~~"11 个"~~ 是各自当时的数,已就地标注。
 - **探针/工具**(老的一批):`backfill_probe`(dist/inv/table/real)、`backfill_scan`、
@@ -73,6 +77,10 @@
   archive/ 再重建空);所有卡删除都归档;存储改**会话=目录制**
   (sessions/<sid>/{chat.log,meta.json,images/},图片跟卡走,URL 不变,
   store 启动一次性迁移旧平铺)。DESIGN §12b 权威。
+  > ⛔ 【2026-09-22 10:45 更正】本任务里的"**内心面板跟随当前卡**"改的是**目标卡选择**
+  > (自走/补写打哪张卡),**不等于用户承认这块面板** —— 把它写成 rewrite 的展示重点
+  > 是写文档时擅自加的。**用户 2026-09-22 10:45 判定内心活动(life-events)与桌面
+  > (workspace)两个面板不留**,现状**标注待砍、不摘**。详见 `server/app/api/view.py` 的模块头。
 
 ### 任务 8 · 记忆检索接进主链路 + 往事不常驻(2026-09-21,用户拍板)
 

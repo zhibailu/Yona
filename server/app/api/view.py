@@ -3,10 +3,31 @@
 thin router 拆分:workspace(桌面)/ life-events(内心活动)/ runtime/status
 这类端点不做任何"动作",只是**从事件日志投影出给人看的数据** —— 纯读取。
 
+⛔ **本模块的面板:用户判定"不留"(2026-09-22 10:45),别当活产品面看。**
+   用户原话:「你要分清楚,我发现了,你之前说的动过的部分其实都是你自己写文档的时候
+   顺手的,**并不是我真的操刀过这一盘**,所以确实文档里有,但并非是我想让它有才有的,
+   所以**项1 应该是不留**且**文档有擅自成分,得改**。」
+
+   事实核对(与用户判断一致的部分):这两个面板的**全部接法与投影实现**都是 baseline
+   (`2903b2a chore: baseline`)搬进来的旧 UI 配套,**不是 rewrite 里设计出来的产品面**。
+   我上一轮把它们说成"用户操刀过(因为 `8138640` 的'内心跟随当前卡')"是**过度解读** ——
+   那一条改的是**目标卡选择**(自走/补写打哪张卡,是真的产品决定),不是"要不要有这个面板";
+   把它们当成"rewrite 核心展示"是我写文档时**擅自**加的分量,已按用户要求改正。
+
+   **现状:标注,不摘**(与 `/autonomy/pulse` 同款处理)。端点仍通、UI 仍在。
+   **本模块剩下的唯一真消费者判断**:`test/test_view_trails.py` 钉的是
+   `all_action_trails()` 的**配对规则**(按 `tool_call_id`,不是找最近一条)—— 那条是
+   2026-09-16 修并发工具后的真 bug 修复,与"面板留不留"无关,别一起删。
+
+   终局(用户定,**别人不要自己动**):
+     ① 整个摘掉 —— 删本模块的 workspace / life-events 两个端点 + 两个 UI pane
+        + `app-presets.js` 里那段 `/admin/life-events` 拉取(**预设 CRUD 要留**,
+        那是真的产品功能);
+     ② 保留 —— 那要由用户重新拍一次"这是产品面",而不是像现在这样靠文档擅自升格。
+
 核心思想(VISION 决策 2/3):状态与行为都从事件日志派生,不另存。
 - 动作轨迹 = 所有卡片日志里的 tool/call + tool/result(观测优先,全局)
-- 内心活动 = **某张卡**的 chat.log 里 source=self 轮的生活事件(2026-09 每卡
-  life:面板跟随当前卡;session_id 缺省 = Yona 常驻旗舰)
+- 内心活动 = **某张卡**的 chat.log 里 source=self 轮的生活事件
 
 这些投影函数是纯函数(吃 store/日志),可以脱离 HTTP 单测。
 """
@@ -96,21 +117,25 @@ def all_action_trails() -> list[dict]:
     call,result,call,result 变成 call,call,result,result,
     "找最近一条"会把结果配到**错的那个 call** 上(后发的 call 先被填)。
     id 是日志里本来就有的,按它配才是准的。
+    (`test/test_view_trails.py` 就钉着这一条 —— 那是真 bug 修复,**别跟面板一起删**。)
 
-    ⚠️ 这里是 core 投影规则(`core/session_log.py` 的 `derive_messages` 里同样读
-    `shadowed_seqs()` 再跳过)的**第二份实现** —— surface 遮蔽已应用
-    (2026-09 修:原来这一份漏了,用户删掉的生活事件/tool 痕迹会残留在面板上)。
-    **改 core 的投影规则时要同步这里**;`store._messages_view` 是照同一份规则写的。
+    ⛔ **本函数服务的是"不留"的面板(2026-09-22 10:45 用户判定)**,见模块头。
+
+    ⚠️ 这里**不跳** `shadowed_seqs()` —— 与 core 的投影规则不一致是**已知且已被
+    用户接受**的状态,不要再"顺手修":
+      · core 的真投影(`core/session_log.py` 的 `derive_messages`、`store._messages_view`)
+        会跳 shadow,所以**聊天窗口**里删掉的东西会消失;
+      · 这个面板不跳,所以删掉的 tool 痕迹**还挂在上面**。
+    **2026-09-22 我先按"四个口径收齐"修过一版,用户随后判定这个面板不留
+    → 该修改已撤回**(理由:不给一个待砍的面板做产品级收口,那属于用户没要的改动)。
+    面板真要留下来那天,再按 core 那条规则补上跳 shadow,并同步改这句注释。
     """
     trails: list[dict] = []
     log_ids = [s["id"] for s in engine._store.list_sessions()]
     for lid in log_ids:
         log = engine._store.load_log(lid)
-        shadowed = log.shadowed_seqs()
         by_call_id: dict[str, dict] = {}
         for e in log.events:
-            if e.seq in shadowed:
-                continue  # 被遮蔽的 call/result 一律不进轨迹(与 core 投影同一规则)
             if e.type == "tool/call":
                 item = {
                     "action": e.data.get("name", ""),
@@ -136,27 +161,23 @@ def life_events(session_id: str, log=None) -> list[dict]:
     (`core.session_log.strip_copied_prefix`,与投影层同一个实现)——
     日志原文一个字不动,只影响这里给 UI 看的东西。
 
-    ⚠️ surface 遮蔽已应用(2026-09 修):这里是 core 投影规则的**第二份实现**,
-    跳过 `shadowed_seqs()` —— 否则你删掉的生活事件还留在内心面板上
-    (UI 真的消费它:`static/app-presets.js` 拉 `/admin/life-events`)。
-    **改 core 的投影规则时要同步这里。**
+    ⛔ **本函数服务的是"不留"的面板(2026-09-22 10:45 用户判定)**,见模块头。
+    它的两个消费方 `get_workspace()` 与 `get_life_events()` 同命运。
+
+    ⚠️ 与 `all_action_trails()` 同款:这里**不跳** `shadowed_seqs()`,删掉的生活事件
+    还留在面板上 —— 同样是用户已接受的现状,别"顺手修"(那条修改已按用户判定撤回)。
 
     log 参数只为省一次读盘(store.load_log 无缓存):调用方已经拿到这张卡的
     log 就传进来,None 时自己 load —— 签名向后兼容,老调用点不用改。
     """
     if log is None:
         log = engine._store.load_log(session_id)
-    shadowed = log.shadowed_seqs()
-    # self_turns 的收法与 store._messages_view 一致(不按 shadow 过滤),
-    # 被遮蔽的事件在下面投影循环里统一跳过 —— 两处保持同一条规则
     self_turns = {
         e.data["turn"] for e in log.events
         if e.type == "turn/start" and e.data.get("source") == "self"
     }
     out: list[dict] = []
     for e in log.events:
-        if e.seq in shadowed:
-            continue
         if e.type == "assistant/message" and e.data.get("turn") in self_turns:
             text = _text_of(e.data.get("content"))
             text = strip_copied_prefix(text, personas_mod.LIFE_EVENT_PREFIX)
@@ -172,7 +193,12 @@ def life_events(session_id: str, log=None) -> list[dict]:
 
 @router.get("/workspace")
 async def get_workspace(session_id: str | None = None, limit: int = 18):
-    """桌面工作区:动作轨迹 = 全卡片 tool 派生(全局);内心活动 = 该卡的生活事件。"""
+    """桌面工作区:动作轨迹 = 全卡片 tool 派生(全局);内心活动 = 该卡的生活事件。
+
+    ⛔ 服务的是"**不留**"的面板(2026-09-22 10:45 用户判定),见模块头。
+    摘除时连 `static/app-objects-sensory.js` 的 `/workspace` 拉取
+    与 `static/index.html` 的 `object-drawer` 那个 pane 一起处理。
+    """
     trails = all_action_trails()
     trails.sort(key=lambda a: a["created_at"], reverse=True)
     actions = [
@@ -232,7 +258,13 @@ async def get_objects(limit: int = 18):
 
 @router.get("/admin/life-events")
 async def get_life_events(session_id: str | None = None, limit: int = 10):
-    """内心活动 = 某张卡自己日志里的自走轮的生活事件(UI 跟随当前会话)。"""
+    """内心活动 = 某张卡自己日志里的自走轮的生活事件(UI 跟随当前会话)。
+
+    ⛔ 服务的是"**不留**"的面板(2026-09-22 10:45 用户判定),见模块头。
+    摘除时连 `static/app-presets.js` 里那段 `/admin/life-events` 拉取
+    与 `static/index.html` 的「生活事件」pane 一起处理 ——
+    ⚠️ 但 `app-presets.js` 的**预设 CRUD 要留**(那是真的产品功能)。
+    """
     found = life_events(_target_card_id(session_id))
     found.sort(key=lambda ev: ev["created_at"], reverse=True)
     events = [

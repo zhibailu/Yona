@@ -1,6 +1,11 @@
         // ========== app-objects-sensory.js —— 冻结区说明(2026-09)==========
-        // 本文件三段拼成,只有第一段还活着:
-        // 1) 桌面/行动舞台(活):/workspace 动作轨迹 + 脉冲 + 内心面板;
+        // 本文件三段拼成,**现在没有一段算"活的产品面"**:
+        // 1) 桌面/行动舞台(**用户判定不留,2026-09-22 10:45**):/workspace 动作轨迹
+        //    + 脉冲 + 内心面板。整条接法是 baseline 搬来的旧 UI 配套,不是 rewrite
+        //    设计的产品面。用户原话:「你之前说的动过的部分其实都是你自己写文档的时候
+        //    顺手的,并不是我真的操刀过这一盘……所以项1 应该是不留」。
+        //    **别当活功能看、别为它补功能**;摘除 = 删本段 + index.html 的 #object-drawer
+        //    pane + 后端 /workspace 与 /autonomy/pulse 两个端点。
         // 2) 感官 视觉/语音/朗读(冻结):后端无 /sensory/* 端点,UI 入口已于
         //    2026-09 任务4 撤掉(按钮/粘贴/拖图/朗读),代码尸体留在原地防盲切,
         //    感官接回(旧 D:\MyProject\Yona\src\sensory)时原样复用;
@@ -40,6 +45,7 @@
             return _refreshWorkspace();
         }
 
+        // ⛔ 拉的是用户判定**不留**的面板(2026-09-22 10:45),见文件头 —— 别当活功能看。
         async function _refreshWorkspace() {
             try {
                 const params = new URLSearchParams();

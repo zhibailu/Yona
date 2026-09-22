@@ -20,6 +20,14 @@
      外部信息(搜索/抓取)才是工具。
   2. **不写角色文案**:返回结构化事实(JSON 信封),措辞留给内容层。
      `usage` 散文只写"怎么用得好"的功能性说明,不做人格化。
+     ✅ **2026-09-22 归位**:八个 `description`/`usage`/参数说明**已搬进
+     `character/tools.py`**(`WORKER_*` 常量),本文件只 import 它们 ——
+     文案归内容层是仓库写死过的规矩(`docs/README.md`「内容层文案 =
+     personas.py + character/tools.py,每个工具的 description/usage 也是内容层,
+     别漏」;`docs/decisions/TRAPS.md` 二.2「内容层文案只有一处来源」;
+     判例:`WAKE_BUDGET_TEMPLATE` 曾写死在 producer 里 → 归位 personas.py)。
+     ⚠️ **别在本文件里再写裸串** —— 两边各一份必然漂移。本文件现在只剩
+     **实现**(网络/文件 IO、沙箱、错误池)。
   3. **沙箱根必须显式传入,不给产品默认值**(不许替用户拍语义)。
      `read_text_file` / `list_files` 只能落在根之内。
 
@@ -61,6 +69,29 @@ from typing import Any, Callable, Protocol
 import requests
 
 from core.tools import Tool
+
+# 模型可见文案(description / usage / 参数说明)**全部来自内容层**,本文件不写裸串
+# —— 理由见文件头纪律 2,以及 `character/tools.py` 里那组常量的注释。
+from character.tools import (  # noqa: E402
+    WORKER_HTTP_DESC,
+    WORKER_HTTP_PARAM_MAX_CHARS,
+    WORKER_HTTP_PARAM_URL,
+    WORKER_HTTP_USAGE,
+    WORKER_LIST_DESC,
+    WORKER_LIST_PARAM_MAX,
+    WORKER_LIST_PARAM_PATH,
+    WORKER_LIST_PARAM_PATTERN,
+    WORKER_LIST_USAGE,
+    WORKER_READ_DESC,
+    WORKER_READ_PARAM_MAX_LINES,
+    WORKER_READ_PARAM_PATH,
+    WORKER_READ_PARAM_START,
+    WORKER_READ_USAGE,
+    WORKER_SEARCH_DESC,
+    WORKER_SEARCH_PARAM_COUNT,
+    WORKER_SEARCH_PARAM_QUERY,
+    WORKER_SEARCH_USAGE,
+)
 
 # ============================================================
 # 取回层(可注入 —— 测试不打网络)
@@ -535,66 +566,60 @@ def make_read_only_tools(
     return [
         Tool(
             name="web_search",
-            description="用关键词搜索网页,返回标题 / 链接 / 摘要的列表。用于获取系统不知道的外部信息。",
+            description=WORKER_SEARCH_DESC,
             parameters={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "搜索关键词"},
-                    "count": {"type": "integer", "description": "要几条结果,默认 5,最多 10"},
+                    "query": {"type": "string", "description": WORKER_SEARCH_PARAM_QUERY},
+                    "count": {"type": "integer", "description": WORKER_SEARCH_PARAM_COUNT},
                 },
                 "required": ["query"],
             },
             func=_web_search,
-            usage=(
-                "只拿到标题和摘要,正文要再用 http_get 打开具体链接;"
-                "搜完想回答得准,通常还要打开最相关的一两条。"
-            ),
+            usage=WORKER_SEARCH_USAGE,
         ),
         Tool(
             name="http_get",
-            description="抓取一个 http/https 网址,把网页转成纯文本返回。用于读某个具体页面的内容。",
+            description=WORKER_HTTP_DESC,
             parameters={
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "完整的 http/https 网址"},
-                    "max_chars": {"type": "integer", "description": "最多返回多少字符,默认 4000"},
+                    "url": {"type": "string", "description": WORKER_HTTP_PARAM_URL},
+                    "max_chars": {"type": "integer", "description": WORKER_HTTP_PARAM_MAX_CHARS},
                 },
                 "required": ["url"],
             },
             func=_http_get,
-            usage=(
-                "配合 web_search 用:先搜到链接,再打开最相关的一两条;"
-                "返回里有 truncated 字段,说明被截断了,别当成全文。"
-            ),
+            usage=WORKER_HTTP_USAGE,
         ),
         Tool(
             name="list_files",
-            description="列出目录下的文件与子目录(可带通配符),用于找文件。",
+            description=WORKER_LIST_DESC,
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "相对根目录的路径,默认根目录"},
-                    "pattern": {"type": "string", "description": "通配符,如 *.md,默认 *"},
-                    "max": {"type": "integer", "description": "最多几条,默认 50"},
+                    "path": {"type": "string", "description": WORKER_LIST_PARAM_PATH},
+                    "pattern": {"type": "string", "description": WORKER_LIST_PARAM_PATTERN},
+                    "max": {"type": "integer", "description": WORKER_LIST_PARAM_MAX},
                 },
             },
             func=_list_files,
-            usage="先 list 找到路径,再用 read_text_file 读内容;别猜路径。",
+            usage=WORKER_LIST_USAGE,
         ),
         Tool(
             name="read_text_file",
-            description="读取一个文本文件的内容(可指定起始行与行数上限)。",
+            description=WORKER_READ_DESC,
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "相对根目录的文件路径"},
-                    "start_line": {"type": "integer", "description": "从第几行开始,默认 1"},
-                    "max_lines": {"type": "integer", "description": "最多读几行,默认 200"},
+                    "path": {"type": "string", "description": WORKER_READ_PARAM_PATH},
+                    "start_line": {"type": "integer", "description": WORKER_READ_PARAM_START},
+                    "max_lines": {"type": "integer", "description": WORKER_READ_PARAM_MAX_LINES},
                 },
                 "required": ["path"],
             },
             func=_read_text_file,
-            usage="文件很长时用 start_line/max_lines 分段读;返回里 truncated 说明后面还有。",
+            usage=WORKER_READ_USAGE,
         ),
     ]
 

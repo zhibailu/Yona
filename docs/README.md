@@ -62,6 +62,14 @@ yona-rewrite/
 1. `docs/decisions/TIMELINE.md`(拍板正典)+ `server/params.py`(✅/⏳ 参数权威)
 2. `character/personas.py`(内容层文案,**系统口吻区**)+ `character/tools.py`
    (每个工具的 `description` / `usage` —— 也是内容层,别漏)
+   > 【2026-09-22 11:10 补注】这条**适用于全部工具,不只她手上的那些**:
+   > 工人(子代理)那四个只读工具的 `description` / `usage` / 参数说明也在
+   > `character/tools.py`(符号前缀 `WORKER_*`),`server/app/worker_tools.py`
+   > **只留实现**(网络与文件 IO、沙箱、错误池),不许再写裸串。
+   > 依据还有 `decisions/TRAPS.md` 二.2「**内容层文案只有一处来源**」;
+   > 判例是 `WAKE_BUDGET_TEMPLATE` 从 producer 归位到 `personas.py`。
+   > ⚠️ 别把它和「**工具分层**」混了 —— 后者说的是"她的工具 ↔ 工人的手"
+   > (`protocols/SUBAGENT.md` §3.3 四条轴),与文案住哪是两件事。
 3. 每目录 README + 代码头部注释
 4. 其它文档(含 STRUCTURE;VISION/DESIGN 是决策源)
 

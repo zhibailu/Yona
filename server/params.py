@@ -65,6 +65,15 @@ HEARTBEAT_STARTUP_DELAY = 15.0   # 启动后多久开始问门
 HEARTBEAT_MIN_INTERVAL = 45.0    # 间隔下限
 HEARTBEAT_MAX_INTERVAL = 600.0   # 间隔上限
 
+# ⏳ 待拍(2026-09-22 从内核默认值提上来,值一个没变):间隔抖动 ±20%。
+#    **为什么原来没有这一项**:`core/heartbeat.py` 的 `Heartbeat.__init__(jitter=0.2)`
+#    有默认值,而全仓(含 `server/`、`test/`)**没有任何调用点传它** —— 于是
+#    "间隔 ±20% 抖动,防机械准点"这条**产品行为只活在内核默认值里**:你在 params
+#    面板上看不到它,也没法拍它。这正是"沿用值被当已定"的形态,所以提上来。
+#    语义:算出来的间隔不是精确值,而是 ×(1 ± jitter) 之后再夹进 [MIN, MAX]。
+#    **0 = 关掉抖动(心跳变成精确准点)** —— 想复现"准点"行为时用这个。
+HEARTBEAT_JITTER = 0.2
+
 # (❌ 2026-09-17 删:BACKFILL_START_DELAY_SEC —— "补写线程等 5s 再跑,防抢用户
 #  首条消息"。它与 LIFE_BACKFILL §9「补写占队首」直接冲突:补写的语义是
 #  "你不在时她的生活",你的消息一进日志那段就结束了,所以补写必须排在用户
@@ -146,6 +155,17 @@ SUBAGENT_MAX_STEPS = 8
 SUBAGENT_FILE_ROOT = ""
 
 
+# ⏳ 待拍(2026-09-22 从 `server/app/engine.py` 的硬编码提上来,值一个没变):
+#    **主聊天轮**的单轮步数上限 —— 她一轮里最多连调几次工具。
+#    为什么原来没有这一项:它是 `engine.py` 里一个裸的 `max_steps=8`,而 params
+#    里另有一个 `SUBAGENT_MAX_STEPS = 8` —— **两个 8 撞数但语义无关**
+#    (一个是"她"的轮,一个是"工人"的轮),改错一个不会有任何报错,只会静默
+#    改掉另一种轮的行为。内核兜底是 `core/loop.py` 的
+#    `AgentLoop.__init__(max_steps: int = 20)`,也不该被产品路径吃到。
+#    ⚠️ 与 `SUBAGENT_MAX_STEPS` 是**两条独立的参数**,别合并。
+MAIN_MAX_STEPS = 8
+
+
 # ============================================================
 # 参数全景打印(py server/params.py —— 像 dsh --dump-config)
 # ============================================================
@@ -163,6 +183,8 @@ _ROWS: list[tuple[str, str, str]] = [
     ("HEARTBEAT_INTERVAL_SEC", f"{HEARTBEAT_INTERVAL_SEC:.0f}s", "✅ 2026-09 心跳判定间隔"),
     ("HEARTBEAT_STARTUP_DELAY / MIN / MAX", f"{HEARTBEAT_STARTUP_DELAY:.0f} / "
      f"{HEARTBEAT_MIN_INTERVAL:.0f} / {HEARTBEAT_MAX_INTERVAL:.0f}s", "⏳ 调度约束(沿用)"),
+    ("HEARTBEAT_JITTER", f"±{HEARTBEAT_JITTER * 100:.0f}%", "⏳ 2026-09-22 从内核默认值提上来"),
+    ("MAIN_MAX_STEPS", str(MAIN_MAX_STEPS), "⏳ 2026-09-22 从 engine 硬编码提上来"),
     ("LLM_DEFAULT_TEMPERATURE", str(LLM_DEFAULT_TEMPERATURE), "✅ 2026-09 默认温度(UI 可覆盖)"),
     ("LLM_OUTPUT_MAX_TOKENS", str(LLM_OUTPUT_MAX_TOKENS), "✅ 2026-09 输出上限(固定,不暴露 UI)"),
     ("HOT_*(YONA_GATE_HOT=1)", f"冷却{HOT_COOLDOWN_SEC:.0f}s / 间隔{HOT_INTERVAL_SEC:.0f}s / "

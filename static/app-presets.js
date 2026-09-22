@@ -100,7 +100,12 @@
             document.getElementById('status-text').textContent = text;
         }
 
-        // ========== 内心活动面板(跟随当前卡,2026-09 每卡 life)==========
+        // ========== 内心活动面板 ==========
+        // ⛔ 用户判定**不留**(2026-09-22 10:45):整条接法是 baseline 搬来的旧 UI 配套,
+        //    不是 rewrite 设计的产品面;文档里说它是"rewrite 核心展示"是我擅自加的,已改。
+        //    **别当活功能看、别为它补功能。**
+        //    摘除 = 删本函数 + index.html 的 #inner-life pane + 后端 /admin/life-events
+        //    (server/app/api/view.py)。⚠️ **本文件的预设 CRUD 要留** —— 那是真产品功能。
         async function _refreshInnerLife() {
             try {
                 const q = currentSessionId

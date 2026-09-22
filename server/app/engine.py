@@ -42,7 +42,7 @@ from core.memory import MemoryIndex, rows_from_events
 from core.memory_cache import MemoryCache
 from core.openai_compat import OpenAICompatibleLLM
 from core.session_log import SessionLog
-from core.subrun import SubRunSpec, execute as execute_subrun
+from core.subrun import SubRunSpec, SubRunStore, execute as execute_subrun
 from core.tools import ToolRegistry
 
 from ..rhythm import LifeSampler
@@ -56,6 +56,7 @@ from ..params import (  # noqa: E402
     HEARTBEAT_COOLDOWN_SEC,
     HEARTBEAT_INTERVAL_SEC,
     HEARTBEAT_MAX_INTERVAL,
+    HEARTBEAT_JITTER,
     HEARTBEAT_MIN_INTERVAL,
     HEARTBEAT_STARTUP_DELAY,
     HOT_COOLDOWN_SEC,
@@ -63,6 +64,7 @@ from ..params import (  # noqa: E402
     HOT_WAKES_PER_DAY,
     LLM_DEFAULT_TEMPERATURE,
     LLM_OUTPUT_MAX_TOKENS,
+    MAIN_MAX_STEPS,
     MEMORY_CACHE_DIRNAME,
     MEMORY_POLL_SEC,
     MEMORY_DEBT_MAX_WAIT_SEC,
@@ -197,58 +199,22 @@ def _run_worker(task: str, label: str) -> dict:
             tools=_worker_tools,
             max_steps=SUBAGENT_MAX_STEPS,
             max_tokens=SUBAGENT_OUTPUT_MAX_TOKENS,
-            # ⚠ 这里少喂两个字段(2026-09 清理时标注,**行为一个字节没动**):
-            #   * `store=` —— core/subrun.py 的 `execute(spec, llm, *, run_id=None,
-            #     store: SubRunStore | None = None)`。不传 = 子运行轨迹**不落盘**;
-            #     证据是同文件末尾那句 `if store is not None: store.save(rec)` ——
-            #     省略即 `SubRunRecord.events`(它的完整轨迹)结算完随对象丢掉。
-            #     (同一结论 core/subrun.py 在 `SubRunStore` 那段也自己写了一遍:
-            #      模块头"完整轨迹落独立 run store"那句"**是设计,不是我现状**"。)
-            #   * `parent=` —— core/subrun.py 的 `SubRunSpec.parent`(血缘:谁派的,
-            #     父会话 id)。不传 = `record.parent` **恒 None**
-            #     (`execute` 里 `parent=spec.parent`)。
-            #   现状定性:**接口给好了、产品端没接**(不是"v1 有意不落盘"):内核模块头
-            #   的设计写着"子运行的完整轨迹落独立 run store —— 真相没被稀释",
-            #   `SubRunStore` 也实现了(一次子运行一个 jsonl,含 save/load/list_ids),
-            #   缺的只是这一处装配。
-            #   代价(是语义,不是猜测):**工人干了什么,事后查不到**。主日志只留
-            #   一行 tool/call + tool/result(带 run_id 血缘),而"顺着 run_id 去 run
-            #   store 复盘"那条路是断的(仓根本没建);她的下一轮也只能看到回执里
-            #   那点蒸馏结论(`_final_text` = 最后一条 assistant 文本)。
-            #   要接时的接法(就是下面两行,用户没拍之前**不许接**):
-            #     store=SubRunStore(DATA_DIR / "subruns")  # 顶部 import 要加 SubRunStore
-            #     parent=_recall_sid["sid"]                # 派活那一刻正在跑的那张卡
-            #   parent 取 `_recall_sid["sid"]` 的依据:工具在 `run_turn` 内被调用,
-            #   而 `_recall_sid` 正是 turn worker 为**这一项**设的当前卡(见
-            #   `recall_index()` 与 `_turn_worker_loop` 的注释)。
-            #   为什么现在**不接**(两条都是产品决策,不是技术障碍):
-            #     ① 一接就多出一个落盘目录(data/subruns/)—— "数据往哪写"归用户拍;
-            #     ② run store 的保留策略(留多久、谁清)还挂在
-            #        docs/protocols/SUBAGENT.md §8「明确挂起」那一行("run store
-            #        保留策略"),没有它落盘只会越积越多。
-            #   将来手术:判定下来就在这一行后面补上面那两行 + 顶部 import;
-            #   这段注释随之整段删。现状与落点见 docs/protocols/SUBAGENT.md §9
-            #   (worker_tools / engine 两行)与 §8。
-            #   代价(是语义,不是猜测):**工人干了什么,事后查不到**。主日志只留
-            #   一行 tool/call + tool/result(带 run_id 血缘),而"顺着 run_id 去 run
-            #   store 复盘"那条路是断的(仓根本没建);她的下一轮也只能看到回执里
-            #   那点蒸馏结论(`_final_text` = 最后一条 assistant 文本)。
-            #   要接时的接法(就是下面两行,用户没拍之前**不许接**):
-            #     store=SubRunStore(DATA_DIR / "subruns")  # 顶部 import 要加 SubRunStore
-            #     parent=_recall_sid["sid"]                # 派活那一刻正在跑的那张卡
-            #   parent 取 `_recall_sid["sid"]` 的依据:工具在 `run_turn` 内被调用,
-            #   而 `_recall_sid` 正是 turn worker 为**这一项**设的当前卡(见
-            #   `recall_index()` 与 `_turn_worker_loop` 的注释)。
-            #   为什么现在**不接**(两条都是产品决策,不是技术障碍):
-            #     ① 一接就多出一个落盘目录(data/subruns/)—— "数据往哪写"归用户拍;
-            #     ② run store 的保留策略(留多久、谁清)还挂在
-            #        docs/protocols/SUBAGENT.md §8「明确挂起」那一行("run store
-            #        保留策略"),没有它落盘只会越积越多。
-            #   将来手术:判定下来就在这一行后面补上面那两行 + 顶部 import;
-            #   这段注释随之整段删。现状与落点见 docs/protocols/SUBAGENT.md §9
-            #   (worker_tools / engine 两行)与 §8。
+            # 血缘:谁派的 = 派活那一刻正在跑的那张卡(见 `recall_index()` 与
+            # `_turn_worker_loop` 的注释 —— 工具在 `run_turn` 内被调用,而
+            # `_recall_sid` 正是 turn worker 为**这一项**设的当前卡)。
+            parent=_sid_now(),
         ),
         llm,
+        # ✅ 2026-09-22 接线(用户拍板):
+        #   「自运行时单独日志,**要留日志**」「最先的诉求是**日志要隔离开**,
+        #     同族的就放一起,不要同目录等级下有不同会话的主日志又有各自的
+        #     subagent,管理和回看会很乱」
+        # → 工人的完整轨迹落在**这张卡自己的目录**里:`sessions/<sid>/subruns/`
+        #   (一跑一个 `<run_id>.jsonl`,见 `store.subruns_dir()` 的注释)。
+        #   原来这里不传 `store=` → `execute()` 末尾 `if store is not None:
+        #   store.save(rec)` 永不执行 → **工人干了什么,事后查不到**:主日志只留
+        #   一行 tool/call + tool/result + run_id,而 run_id 指向的文件根本不存在。
+        store=_subrun_store_for(_sid_now()),
     )
     return {
         "run_id": record.run_id,
@@ -364,6 +330,44 @@ def recall_index() -> MemoryIndex | None:
 
 
 _tools.register(make_recall_tool(recall_index))
+
+
+def _sid_now() -> str | None:
+    """**现在正在跑哪张卡**(worker 为这一项设的),没有则 None。
+
+    与 `recall_index()` 同源(都读 `_recall_sid`),所以"recall 翻哪张卡"和
+    "工人轨迹记在哪张卡名下"永远是同一个答案 —— 不会出现她翻 A 卡、
+    工人日志却挂到 B 卡下面这种事。
+
+    None 的两种情形:工人在实验台/探针里跑(没有 turn worker 在跑),
+    或引擎还没起来。**调用方必须处理 None**,别兜底猜一张卡。
+    """
+    return _recall_sid["sid"]
+
+
+def _subrun_store_for(sid: str | None) -> "SubRunStore | None":
+    """工人(子运行)轨迹仓:落在**这张卡自己的目录**里(`sessions/<sid>/subruns/`)。
+
+    2026-09-22 10:45 用户拍板:
+    「自运行时单独日志,**要留日志**」「最先的诉求是**日志要隔离开**,同族的就放一起,
+      不要同目录等级下有不同会话的主日志又有各自的 subagent,管理和回看会很乱」
+
+    → 每个会话的**所有日志同族同处**:主日志 `chat.log` + 工人日志
+      `subruns/<run_id>.jsonl`,一起住在 `sessions/<sid>/` 下;
+      不同会话**绝不**混在同一层级(以前想放的 `data/subruns/` 正是那种混法 ——
+      所有卡的工人日志平铺在一个目录里,只能靠 run_id 猜是哪张卡的)。
+    → 顺带把"清理策略"这个原来不接线的理由**消掉了**:子运行日志**跟卡同生共死** ——
+      `store.delete_session()` 是把 `sessions/<sid>/` **整袋**移进
+      `archive/<ts>-<sid>/`,工人日志自然一起归档,不需要另立保留规则,
+      也不会在 `data/` 下积出一个只增不减的目录。
+
+    ⚠️ sid 为 None(工人在实验台/探针里跑)时**返回 None = 不落盘**:宁可不写,
+       也不要写到一个猜出来的卡目录里 —— 猜错就是把别人的轨迹记到这卡名下。
+    """
+    if sid is None or _store is None:
+        return None
+    return SubRunStore(_store.subruns_dir(sid))
+
 
 _store: SessionStore | None = None
 _loop: AgentLoop | None = None
@@ -1083,12 +1087,10 @@ def _build_engine(cfg: dict | None = None) -> None:
         # ⚠ 这个 8 与 `params.SUBAGENT_MAX_STEPS = 8`(server/params.py 的 `SUBAGENT_MAX_STEPS`)
         #    **只是撞数,语义无关**:那个是**子运行(工人)**的步数上限,这个是
         #    她自己的轮。改一个不会改另一个 —— 看到两边都是 8 不代表同一条线。
-        # ⚠ 它本身是一条**漏网的 params 旋钮**:产品语义参数的唯一来源是
-        #    server/params.py,而这一条硬编码在装配处(内核兜底是另一个数 ——
-        #    core/loop.py 的 `AgentLoop.__init__` 签名 `max_steps: int = 20`)。
-        #    挪进 params 要改 server/params.py,不在本次清理授权范围内,先就地标着。
-        #    将来手术:params.py 加一条(如 MAIN_MAX_STEPS = 8),这一行改成它。
-        max_steps=8,
+        # ✅ 2026-09-22:已挪进 params(`MAIN_MAX_STEPS = 8`,值一个没变)。
+        #    内核兜底是另一个数(`core/loop.py` 的 `AgentLoop.__init__`
+        #    签名 `max_steps: int = 20`),产品路径不吃它。
+        max_steps=MAIN_MAX_STEPS,
         # 折叠视图开(2026-09-19 用户拍板,原为 False):
         # **已结束轮里,没声明 retain_result 的工具痕迹不再进模型输入**,只留她
         # 说过的话。要的就是用户那句「tool 的 result 是个**瞬时产物**,不拼进
@@ -1212,6 +1214,10 @@ def _start_heartbeat() -> None:
         startup_delay=HEARTBEAT_STARTUP_DELAY,
         min_interval=HEARTBEAT_MIN_INTERVAL,
         max_interval=HEARTBEAT_MAX_INTERVAL,
+        # jitter **必须显式传**(2026-09-22 补):它原来是内核默认值 0.2 在生效
+        # —— 全仓零调用点传它,等于一条产品行为只活在内核里、params 面板上看不到。
+        # 现在 params 有 `HEARTBEAT_JITTER`(值仍是 0.2,行为一个字节没变)。
+        jitter=HEARTBEAT_JITTER,
         on_error=_on_hb_error,
     )
     _heartbeat.start()

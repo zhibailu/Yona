@@ -599,3 +599,63 @@ def make_recall_tool(
     #      正经做法是往 `core/tools.py` 的 `Tool` 上加字段(但那是内核,得单独拍板)。
     tool.run_structured = _run  # 测试用:直接断言结构化结果(见上,非 Tool 字段)
     return tool
+
+
+# ============================================================
+# 工人的手 · 四件只读工具的**文案**(2026-09-22 归位到内容层)
+# ============================================================
+
+# 这四件工具的**实现**住在 `server/app/worker_tools.py`(网络与文件 IO,不是纯逻辑,
+# 所以不进 core;也不是"她是谁",所以原本没进 character)—— 那两条落点判断不变
+# (`docs/protocols/SUBAGENT.md` §9 的"工人的手(已毕业进产品层)")。
+#
+# 但**文案**归内容层,这是本仓库已经写死过的规矩:
+#   · `docs/README.md`「内容层文案 = `character/personas.py` + `character/tools.py`
+#     (每个工具的 `description` / `usage` —— 也是内容层,别漏)」;
+#   · `docs/decisions/TRAPS.md` 二.2「**内容层文案只有一处来源**」;
+#   · 判例:`WAKE_BUDGET_TEMPLATE` 曾写死在 producer 里 → 归位到 `personas.py`。
+# 工人工具的 `description`/`usage` 是**模型可见文案**(进 tools[] schema 与
+# `[可用工具用法]` 段),所以按同一条规矩住这里;`worker_tools.py` 只 import 它们。
+#
+# 同族的工人文案已经在内容层了,可以对照着看:`character/personas.py` 的
+# `SUBAGENT_SYSTEM`(任务说明)与 `SUBAGENT_BUDGET_TEMPLATE`(步数预算)。
+#
+# ⚠️ **改文案只改这里**。`server/app/worker_tools.py` 里不许再出现裸串 ——
+#    一旦两边各写一份,就会走 `TRAPS.md` 二.2 那条老路(手抄多份必然漂移)。
+# ⏳ 这批文案属**阶段二**范围(工具文案逐条打磨),现在只做归位、一字未改。
+
+# web_search
+WORKER_SEARCH_DESC = (
+    "用关键词搜索网页,返回标题 / 链接 / 摘要的列表。用于获取系统不知道的外部信息。"
+)
+WORKER_SEARCH_USAGE = (
+    "只拿到标题和摘要,正文要再用 http_get 打开具体链接;"
+    "搜完想回答得准,通常还要打开最相关的一两条。"
+)
+WORKER_SEARCH_PARAM_QUERY = "搜索关键词"
+WORKER_SEARCH_PARAM_COUNT = "要几条结果,默认 5,最多 10"
+
+# http_get
+WORKER_HTTP_DESC = (
+    "抓取一个 http/https 网址,把网页转成纯文本返回。用于读某个具体页面的内容。"
+)
+WORKER_HTTP_USAGE = (
+    "配合 web_search 用:先搜到链接,再打开最相关的一两条;"
+    "返回里有 truncated 字段,说明被截断了,别当成全文。"
+)
+WORKER_HTTP_PARAM_URL = "完整的 http/https 网址"
+WORKER_HTTP_PARAM_MAX_CHARS = "最多返回多少字符,默认 4000"
+
+# list_files
+WORKER_LIST_DESC = "列出目录下的文件与子目录(可带通配符),用于找文件。"
+WORKER_LIST_USAGE = "先 list 找到路径,再用 read_text_file 读内容;别猜路径。"
+WORKER_LIST_PARAM_PATH = "相对根目录的路径,默认根目录"
+WORKER_LIST_PARAM_PATTERN = "通配符,如 *.md,默认 *"
+WORKER_LIST_PARAM_MAX = "最多几条,默认 50"
+
+# read_text_file
+WORKER_READ_DESC = "读取一个文本文件的内容(可指定起始行与行数上限)。"
+WORKER_READ_USAGE = "文件很长时用 start_line/max_lines 分段读;返回里 truncated 说明后面还有。"
+WORKER_READ_PARAM_PATH = "相对根目录的文件路径"
+WORKER_READ_PARAM_START = "从第几行开始,默认 1"
+WORKER_READ_PARAM_MAX_LINES = "最多读几行,默认 200"

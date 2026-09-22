@@ -110,6 +110,20 @@ yona-rewrite/
 
 ## 4. UI 现状(旧 static 复用,重要发现)
 
+> ⛔ **【2026-09-22 10:45 更正 —— 用户判定:两个"面板"不留】**
+> 下表原来把 `app-presets.js` 写成「life-events 内心活动面板(**rewrite 核心展示**)」、
+> 把 `app-objects-sensory.js` 写成「**workspace 桌面(动作轨迹/生活事件/脉冲)**」,
+> 并在下面写「整体不剪 UI —— 聊天主流程、workspace、life-events 全靠它」。
+> **用户当场否掉这三句**:「你之前说的动过的部分其实都是你自己写文档的时候顺手的,
+> **并不是我真的操刀过这一盘**,所以确实文档里有,但并非是我想让它有才有的,
+> 所以项1 应该是不留且**文档有擅自成分,得改**。」
+> → 真相:这两个面板的接法与投影**全是 baseline(`2903b2a`)搬来的旧 UI 配套**,
+> 不是 rewrite 设计出来的产品面。我上一轮拿 `8138640` 的"内心跟随当前卡"当证据,
+> 说"用户操刀过这个面板"是**过度解读** —— 那一条改的是**目标卡选择**
+> (自走/补写打哪张卡,那条确实是她拍的),不是"要不要有这个面板"。
+> → 现状**标注为"不留/待砍"**(与 `/autonomy/pulse` 同款,不摘),详见
+> `server/app/api/view.py` 的模块头。下表对应单元格已就地改正。
+
 旧 UI 9 文件原样拷入,但**文件名与功能不对应** —— 剔除空壳页面不能整文件删:
 
 | UI 文件 | 真能力 | 空壳/占位 |
@@ -117,9 +131,9 @@ yona-rewrite/
 | app-core.js | 主聊天逻辑、设置(真接线)、会话切换、连接管理(模型下拉/向导) | — |
 | app-messages.js | 消息渲染 + busy 帧提示(已加 rewrite 分支) | — |
 | app-sessions.js | 会话管理(真) | — |
-| app-presets.js | **life-events 内心活动面板(rewrite 核心展示)** + 预设 CRUD(2026-09 真存盘) | 预设已作用于运行时:应用预设 = 复制进会话快照(`{sid}.meta.json` 的 `settings`),当轮 > 快照 > 默认三层合并;权威见 DESIGN §12 + TIMELINE 任务 6(2026-09-17 更正:旧文写"尚未作用,等快照整合",该整合已落) |
-| app-objects-sensory.js | **workspace 桌面(动作轨迹/生活事件/脉冲)** | 感官(发图/语音/朗读)+物件舞台:后端无端点/恒空,UI 入口已撤(2026-09 任务4/5),代码尸体标注冻结区,感官接回时复用 |
-| app-media-debug.js | **LLM 输入输出调试(已接真日志:engine._TracingLLM 环形缓冲,折叠不空轮询;2026-09 起每调用带 token 用量与截断标记)** | — |
+| app-presets.js | **预设 CRUD(真产品功能,2026-09 真存盘)** | ⛔ **内心活动面板 = 不留(见上)**:`_refreshInnerLife()` 那段接的是 baseline 旧面板,用户未操刀、待砍。预设已作用于运行时:应用预设 = 复制进会话快照(`{sid}.meta.json` 的 `settings`),当轮 > 快照 > 默认三层合并;权威见 DESIGN §12 + TIMELINE 任务 6(2026-09-17 更正:旧文写"尚未作用,等快照整合",该整合已落) |
+| app-objects-sensory.js | —(**三段没有一段算活的产品面**) | ⛔ **桌面/行动舞台 = 不留(见上)**:`/workspace` 动作轨迹 + 脉冲 + 内心面板,全是 baseline 旧配套。感官(发图/语音/朗读)+物件舞台:后端无端点/恒空,UI 入口已撤(2026-09 任务4/5),代码尸体标注冻结区,感官接回时复用 |
+| app-media-debug.js | **LLM 输入输出调试(已接真日志:engine._TracingLLM 环形缓冲,折叠不空轮询;2026-09 起每调用带 token 用量与截断标记)**;**背景图/头像存取 + 拖拽选位(真接线)** | — |
 | app-admin.js | — | 已剪:stats/rebuild-vector/export/clean-empty 四按钮 404,移 `static/_unused/` |
 
 **设置面板(2026-09 第 1 轮收紧,真接线)**:温度滑块 / 角色设定(留空=
@@ -137,9 +151,14 @@ core/loop.py run_turn model 字段);「连接/更换模型」按钮 = 首启向�
 手填区已撤,`/admin/discover-models` 端点保留未用。key 落本机明文文件
 (gitignored 的 data/),HTTP 一律不回传(engine.llm_state 已 sanitize)。
 
-**决策**:整体不剪 UI —— 聊天主流程、workspace、life-events 全靠它,契约完整;
+**决策**:整体不剪 UI —— 聊天主流程全靠它,契约完整;
 空壳按钮点击为空/静默,不影响主体验,且未来接回 RAG/感官时 UI 现成。
 只剪**确认无后端、独立成块**的入口(本轮:action 菜单 4 按钮)。未来要精简
+
+> ⛔ 【2026-09-22 10:45 更正】原句是「整体不剪 UI —— 聊天主流程、**workspace、life-events**
+> 全靠它,契约完整」。"workspace / life-events 全靠它"这半句**是我自己加的擅自表述**,
+> 用户当场否掉(**那两个面板判为不留**,见本节顶部的更正框)。只保留了"聊天主流程"
+> 这一半 —— 那一半是真的。
 表面积时,按"能力与按钮同生共死"(DESIGN §8 收束口)逐按钮清。
 
 ---
@@ -161,7 +180,7 @@ core/loop.py run_turn model 字段);「连接/更换模型」按钮 = 首启向�
 - 生命周期:Heartbeat 闸门(纯规则)+ LifeLoop 自走轮(source=self)
 - **离线生活补写**(核心算法):rate = K×shape 连续概率判定,收编主 loop,
   无第二 AgentLoop —— 详见 `docs/protocols/LIFE_BACKFILL.md`
-- 服务:32 端点(2026-09-21 实测;行数 / 端点数以代码为准)/ SSE 流式(asyncio.Queue)/ busy 帧 / workspace+life-events 观测
+- 服务:32 端点(2026-09-21 实测;行数 / 端点数以代码为准)/ SSE 流式(asyncio.Queue)/ busy 帧 / workspace+life-events 观测(**⚠️ 这两个观测面板 2026-09-22 被用户判为"不留",见本文件 §4 顶部的更正框**)
 - 数据:每卡一套 life(2026-09 拍板)—— 生活流写卡**自己**的
   `chat.log(source=self)`,不再有匿名全局 `_life.log`;存储 = 会话目录制
   `sessions/<sid>/{chat.log, meta.json, images/}`。

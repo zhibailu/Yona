@@ -166,6 +166,47 @@ def test_life_backfill_order_is_shortest_gap_first():
     assert store.life_backfill_order()[0] == new, store.life_backfill_order()
 
 
+def test_deleted_all_messages_kills_the_card_as_life_target():
+    """把一张卡的消息**全删了** → 它不再算"有真人说过话",退出补写/自走目标。
+
+    2026-09-22 10:45 用户拍板(口径原话):
+    「如果是说当前会话 0 消息了的话,应该是整个对应日志归档,**会被补写等过滤掉**,
+      当然**不继续补东西,就是死掉了**。」
+
+    删除走的是 tail-cut shadow(日志原文一字不动),所以"全删"= 所有消息的 seq
+    都被 `surface/shadow` 盖住 —— 判据必须按**可见消息**算,不能按原始事件算。
+    按原始事件算的后果:卡被清空了,她还会被选为目标,继续往里写生活。
+
+    这条同时钉住"四个地方一个口径":`derive_messages` / `_messages_view` /
+    `view` 的两个投影 / 这里的卡选择,全都跳 shadow。
+    """
+    store = SessionStore(Path(tempfile.mkdtemp()))
+    kept = store.create_session("还看得见")
+    wiped = store.create_session("聊过但被清空")
+
+    for sid, text in ((kept, "在吗"), (wiped, "在吗")):
+        log = store.load_log(sid)
+        log.append("user/message", content=[{"type": "text", "text": text}],
+                   source="user", turn=1)
+        store.save_log(sid, log)
+
+    # 前置:两张卡都算"有真人说过话"
+    assert set(store.life_backfill_order()) == {kept, wiped}
+
+    # 把 wiped 整条删掉(tail-cut shadow,从第一条删到末尾)
+    store.delete_messages_from(wiped, 0)
+
+    # 日志原文还在(只是被遮蔽)—— 这是"归档 vs 遮蔽"的区别所在
+    assert store.load_log(wiped).of_type("user/message"), "日志原文不该被改"
+    assert store.load_log(wiped).shadowed_seqs(), "应有 shadow 注解"
+
+    # 判据按可见消息算 → 它死掉了
+    assert not store._has_user_talk(wiped), "全删光后不该再算'有真人说过话'"
+    assert store._has_user_talk(kept), "没被删的卡不受影响"
+    assert wiped not in store.life_backfill_order(), "清空的卡该退出补写目标"
+    assert kept in store.life_backfill_order()
+
+
 if __name__ == "__main__":
     test_message_view_projection()
     test_delete_from_is_tail_cut_shadow()
@@ -175,4 +216,5 @@ if __name__ == "__main__":
     test_self_turn_not_in_chat_view()
     test_created_at_no_seconds_for_ui_slice()
     test_life_backfill_order_is_shortest_gap_first()
+    test_deleted_all_messages_kills_the_card_as_life_target()
     print("server/store all tests passed")
