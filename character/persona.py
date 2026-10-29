@@ -25,13 +25,19 @@ from core.composer import SystemComposer, SystemSection, make_usage_section
 from .state import CharacterState
 
 # 小夜子默认段优先级
-_PERSONA_PRIORITY = 10
-# 轮次情境:紧跟人设之后、世界/状态之前。原先这里是个裸 `12`(本文件其余段全用常量),
-# 命名是为了让"位置在 persona 与 world 之间"这件事在常量表里看得见,不是别处共享的值。
-_SITUATION_PRIORITY = 12
-_WORLD_PRIORITY = 15
-_STATE_PRIORITY = 20
-_USAGE_PRIORITY = 30
+#
+# ⚠️ **2026-10-29 用户拍板:按"易变性"排 —— 越稳定的越靠前,越易变的越靠后。**
+# 因为上游是**前缀缓存**:SYSTEM 里靠前的字节一变,它**后面的一切**(包括整段对话
+# 历史)全部重算。改前 `[当前时间]`(分钟级)排第 3 位、而 460 字的工具用法排最后
+# → 钟一响,工具用法和历史一起作废(实测 SYSTEM 647 字里工具用法占 460 字)。
+# 现在的顺序:人设 → 情境 → 工具用法 → 状态 → 时间线 → 时间预算 → 当前时间。
+_PERSONA_PRIORITY = 10  # 从不变
+# 轮次情境:仍在人设之后。常量化的理由:让"位置"在常量表里看得见,不是别处共享的值。
+_SITUATION_PRIORITY = 12  # 换一种轮(陪聊/自走/补写)才变
+_USAGE_PRIORITY = 20  # 工具集变才变;SYSTEM 里最大的一块,尽量往前(原 30)
+_STATE_PRIORITY = 30  # 换衣服/心情才变(原 20)
+# world = `[当前时间] HH:MM` —— **每分钟都变**,必须放最后(原 15)。
+_WORLD_PRIORITY = 90
 
 # 工人(子运行)的任务说明段:占**人设段那一格**(10)。工人的段清单里没有 persona,
 # 任务说明就是它的"最前面那一段" —— 沿用同一个数字,是让"同一个位置、不同清单"

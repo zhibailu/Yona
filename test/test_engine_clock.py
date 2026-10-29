@@ -267,7 +267,11 @@ def test_begin_self_wake_anchored_to_log_tail_and_clamped():
                 assert last.end <= now + 1e-6  # 截断:start+预算 ≤ 当前时刻
                 assert eng._wake_anchor["start"] == last.start, seed
         # end_self_wake 把预算与事件锚一起清掉
-        eng.begin_self_wake(log, rng=random.Random(6))
+        # seed 搜索而非写死:窗口只有 4h,命中是稀疏事件(4h 期望 ≈0.3 件)
+        # —— 写死一个 seed 会在换采样算法时无谓地红(同本文件下方那处写法)
+        hit = next(i for i in range(200) if LifeSampler(
+            tail, now, rng=random.Random(i)).sample())
+        eng.begin_self_wake(log, rng=random.Random(hit))
         assert eng._wake_budget["min"] > 0 and eng._wake_anchor["start"] > 0
         eng.end_self_wake()
         assert eng._wake_budget["min"] == 0.0

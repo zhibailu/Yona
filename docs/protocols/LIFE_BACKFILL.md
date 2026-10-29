@@ -41,13 +41,28 @@
 
 否决过 λ(t) = 期望事件/小时(速率,隐含"长度×λ");最终定为:
 
-> **连续概率判定**。一条可微概率曲线 rate(t),程序从 last_active 到 now
-> 按固定粒度逐格点伯努利判定:命中概率 = rate(t)·Δt。
-> 命中 → 生成事件;不中 → 下一格点。**期望事件数 = ∫ rate(t) dt**
+> **连续概率判定**。一条可微概率曲线 rate(t),命中概率 = rate(t)·Δt。
+> 命中 → 生成事件。**期望事件数 = ∫ rate(t) dt**
 > (曲线下面积,可微积分预计算:"7~9 点预期 0.8 件")。
 
-- 粒度:默认**分钟级**(13h ≈ 780 格点,<1ms);秒级 ≈ 47k、~5ms 也可接受。
 - 概率含义:rate(t) 是"该时刻生成事件的概率密度",不是件数速率。
+- **判定的抽法**(2026-10-08 换 —— 判定本身一个字没改,只换抽法):
+  - 原版 = 从 last_active 到 now **按固定粒度逐格点**掷伯努利骰子,
+    成本 **O(窗口/格点)**(365 天 ≈ 52.6 万格,几乎全落在不命中/睡眠窗上)。
+  - 现版 = **thinning(Lewis-Shedler 拒绝采样)直接抽事件时刻**:按 rate 的
+    **上界**抽候选间隔 → 按 `rate(t)/上界` 接受或丢掉。成本 **O(事件数)**
+    (同一窗口从 43,200 格降到约 39 件)。
+  - 两者关系:逐格伯努利在 Δt→0 时的极限 = 这条连续过程;现版抽的是
+    **极限本身**,原版是它的**离散步进**(事件时刻被量化在分钟刻度上)。
+  - 实测(对拍探针):30 天 窗口 33×、365 天 128×;10 万用户各补 30 天
+    从 3,158s 降到 101s。**分布不变**(30 天 ×400 次:件数 39.70 vs 39.55,
+    0.38σ;小时分布最大偏差 0.65 个百分点)。
+  - ⚠️ 单位坑:rate 是"件/**小时**"、t 是 Unix **秒** —— 抽指数间隔用
+    "每秒"速率,接受概率用"每小时"上界;混用差 3600 倍(接受概率恒 > 1
+    → 件数翻倍、shape 被抹平成"醒着就均匀")。`test/test_backfill.py` 的
+    `test_events_track_shape_between_awake_windows` 就是这道闸。
+  - 落地:`server/rhythm.py` 的 `LifeSampler.sample()` / `_next_event_after()`
+    / `ShapeCurve.peak()`;拍板记录见 `docs/decisions/TIMELINE.md` 2026-10-08。
 
 ### 1.2 正交:rate(t) = K × shape(t)(用户明确要求的两个独立旋钮)
 
@@ -69,7 +84,7 @@ rate(t) = K × shape(t)
 
 - 命中后抽 **budget**(时长分布,分钟)。作用三件:
   ① 给模型当上限("这段时间约 X 分钟,只做一件事、别做做不完的事");
-  ② 跳过 budget 内的格点(这段时间她在做那件事,不再判定 —— 天然产生空档);
+  ② 跳过 budget 内的判定(这段时间她在做那件事,不再判定 —— 天然产生空档);
   ③ 算相对时间。
 - **budget 不进日志** —— 事件只有**起始时间 + 内容,无终止时间**。
 - **一个时间段 = 一件事**(模型每段只产一件,prompt 强调)。
@@ -100,7 +115,7 @@ start 相减)。gap > 60s → 当轮提示"距上一件事做完已过约 X";否
 | K(总期望件数) | **1.5** | ✅ 用户拍板 | `server/params.py` `DEFAULT_K` |
 | shape 曲线 | "晚间峰那版"表(下) | ⚠️ 候选,待拨 | `SHAPE_TABLE`(归一化 `ShapeCurve`) |
 | budget 时长分布 | 短15%/10–25m,中55%/30–90m,长30%/100–200m | ✅ 用户拍板"就这样用" | `DEFAULT_DURATION_MIX` |
-| 判定粒度 | 60s(分钟级) | ✅ | `GRID_SEC` |
+| ~~判定粒度~~ → 现为「截断后前进步长」 | 60s | ⚠️ **语义变了,待用户拍**(2026-10-08) | `GRID_SEC` |
 | 睡眠窗 | 23:30–06:30(shape=0) | ✅ | `SLEEP_START_H` / `SLEEP_END_H` |
 | 最短事件 | 5 分钟(不足不记) | ✅ | `MIN_EVENT_SEC` |
 | 补写触发阈值 | 离线 ≥ 30 分钟 | ✅ | `server/params.py` `WAKE_AFTER_GAP_SECONDS` |
@@ -168,19 +183,42 @@ start()(lifespan 调一次)
          │   # 的 with _lock: 拿,线程自己不抢
          └─ _card_job(sid)(每卡一项;以下 ├─ 即 _card_job 内部步骤):
          ├─ card_log = load_log(sid)
-         ├─ last_active = 该卡日志尾事件时间
+         ├─ last_active = _life_anchor(该卡日志尾事件时间, meta.life_covered_until)
+         │               # = max(尾事件 time, 补写游标);2026-10-29 补
          ├─ _wake_decision(last_active, now)  # 纯函数:首启不补 / gap<30min 正常重启
-         │                                    #   / gap≥30min → 补写;不触发则直接返回
+         │                                    #   / gap≥30min → 补写
+         │                                    #   ❗不触发 → **只 mark_life_covered 就 return**
          ├─ LifeSampler(last_active, now).sample() → events[]
-         ├─ 若无事件 → 跳过(离线太短/稀疏/没判定中,正常)
+         ├─ 若无事件 → **只 mark_life_covered 就 return**(不调模型)
          ├─ snap = 该卡快照的人格覆盖(有则用)
          └─ 逐事件:
-             ├─ 组 self_note(预算上限 + gap_note)
+             ├─ 组 self_note(预算上限;绝对区间 w0→w1;**不含空档旁白**)
              ├─ card_log.set_time_cursor(e.start); _backfill_clock["ts"] = e.start
              ├─ _loop.run_turn(source="self", log=card_log, tools=空, self_note, system_prompt=人格)
-             └─ finally: clear_time_cursor(); _backfill_clock["ts"] = 0.0
-         收尾: save_log(sid, card_log) → _life_gate.mark_self()(进入心跳冷却,节奏衔接)
+             ├─ finally: clear_time_cursor(); _backfill_clock["ts"] = 0.0
+             └─ save_log(sid, card_log)     ← 2026-10-29 拍板:**每件事落一次盘**
+         收尾: **mark_life_covered(sid, now)**(游标推到窗口终点)→ _life_gate.mark_self()(进入心跳冷却,节奏衔接)
 ```
+
+> 【2026-10-29 20:28 更正】补上了**补写游标**,并把这套分支定死。用户原话:
+> 「**没判定到触发就直接 pass 掉啊,给模型看干嘛**,甚至都不该有多余的后续执行逻辑,
+> **只应该推动了游标就结束了**啊?」+「30min 只是个**前置阈值**,和……游标逻辑不怎么相干」。
+>
+> - 游标 = 卡 `data/sessions/<sid>/meta.json` 的 **`life_covered_until`**(epoch 秒),
+>   由 `SessionStore.life_covered_until()` / `mark_life_covered()` 读写(`server/store.py`)。
+>   **写法是读-改-写、只动这一个键**,meta 其余字段原样保留(meta 是增量文件,不整份重建);
+>   meta 不存在时不写、不造卡。**不进 `chat.log`** —— 游标是算法自己的账,不是模型需要的事实。
+> - **`_life_anchor` = `max(尾事件 time, 游标)`** —— 这是"这张卡活到什么时候"的唯一锚点。
+>   改前只取尾事件的 `time`,而补写窗口止于 `now`,所以**每次重启都会再判一次离线**。
+> - **没触发 / 0 个事件 = 只推游标就返回**,不调模型、不做后续动作。
+> - 中途异常/被杀**不推进**游标 → 下次从断点续。
+
+> 【2026-10-29 20:40 更正】上面伪代码的收尾原来是「**整张卡跑完之后** `save_log` 一次」。
+> 用户 2026-10-29 拍板:「确实应该模型补写一件事就落盘日志一次,得改,而不是等到一整个
+> 遍历结束」。代价与实测:一张 38 天的卡 ≈ 57 个事件、每个事件一次 LLM 调用,中途重启 /
+> Ctrl+C 会让前面几十次调用**全部作废**,而且**磁盘上不留任何痕迹**(`chat.log` 的 mtime
+> 一动不动),下次启动从同一个"离线 38 天"重来 —— 2026-10-29 实测就是这么"跑了三轮"的。
+> 现在改为**循环体内每轮 `save_log`**。
 
 > 【2026-09-21 23:10 更正】本伪代码当时写的是「线程自己**立刻抢 _lock**、只补
 > `life_session_id()` 那一张卡、没聊过任何卡走 Yona 旗舰兜底」—— 锁的持有者写错了,
@@ -217,20 +255,24 @@ public:
   SHAPE_TABLE / DEFAULT_K / DEFAULT_DURATION_MIX / GRID_SEC / MIN_EVENT_SEC
   density_at(hour, table=None)        线性插值(未归一化)
   ShapeCurve(table=None)              ∫=1、睡眠窗=0;构造时缓存归一化常数 z
+                                      peak() = 睡眠窗外最大值 = thinning 的接受上界
   DEFAULT_SHAPE                       默认候选曲线
   shape_at(hour) / rate_at(hour,k)    K×shape(件/小时 = 命中概率密度)
   integral_shape(h0,h1)               ∫shape(h1 可跨天)
   Event(start, budget_min)            end = start+budget 只是统计用派生属性
   LifeSampler(t0, t1, *, rng/seed, K, shape/shape_table, duration_mix)
 
-sample() 逐格点:
-  t 从 t0 走到 t1,格长 GRID_SEC:
-    睡眠窗内 shape=0 → 永不命中(自然跳过)
-    否则 命中概率 = K·shape(h)·(GRID_SEC/3600)
-    命中 → 抽 raw budget → end = min(t+budget, t1, 下一个睡眠窗起点)
-          end−t ≥ 5min 才记 Event(start=t, budget_min=(end−t)/60)
-          然后 t = end(跳过该段);否则 t += 格长
-  判定机会耗尽(t ≥ t1)即结束
+sample() —— thinning 直接抽事件时刻(2026-10-08 换):
+  上界 = K × shape.peak()  (睡眠窗外最大值;折点求值即精确 —— 26 次,不扫细步)
+  t = t0,循环:
+    按「每秒」速率(上界/3600)抽一个指数间隔 → 候选 t
+      t ≥ t1                → 结束
+      睡眠窗内(shape=0)     → 必然拒绝,连骰子都不用掷,直接抽下一候选
+      random() ≥ K·shape(h)/上界(按「每小时」算) → 不接受,再来
+    接受 → 抽 raw budget → end = min(t+budget, t1, 下一个睡眠窗起点)
+           end−t ≥ 5min 才记 Event(start=t, budget_min=(end−t)/60)
+           然后 t = end(跳过该段);否则 t += GRID_SEC
+  到 t1 都没有判定机会 → 结束
 ```
 
 - 睡眠窗截断:23:00 命中、抽到长 budget,名义消费裁到 23:30 前
@@ -267,13 +309,26 @@ SELF_SITUATION + 动态 note 覆盖,不再单独生效):
 
 ```
 [引擎动态拼接的当轮数据 —— server/app/engine.py 的 _card_job 里那段 note 拼接,不是内容层常量]
-f"这段时间(约 {_human_gap(e.budget_min*60)})里你只做了**一件事**——就是现在刚做完/正在做的这一件。{gap_note}"
+f"从 {w0} 到 {w1}(约 {_human_gap(e.budget_min*60)})里你只做了**一件事**——就是现在刚做完/正在做的这一件。"
 
-gap_note(server/app/engine.py 的 _card_job 里的 gap_note):
-  i == 0        → ""
-  空档 > 60s    → "距离你上一件事做完已经过了约 X(中间的时间平平淡淡,没发生值得记的事)。"
-  否则          → "你上一件事刚做完不久。"
+w0 = e.start 的 "%m-%d %H:%M";w1 = (e.start + e.budget_min*60) 的 "%m-%d %H:%M"
+(2026-10-29 改:干写的"这段时间"换成**算法算出的绝对区间**)
+
+⚠️ 2026-10-29 起**没有 gap_note 了** —— 两件事之间的空档不进 prompt(用户:
+"没判定到触发就直接 pass 掉啊,给模型看干嘛")。原 gap_note 的三个分支已删。
 ```
+
+> 【2026-10-29 20:40 更正】上面那段文案已改:**不再干写"这段时间",改成显式绝对区间**
+> 「从 {w0} 到 {w1}」。用户口径原话:「(这段时间约 1 小时 13 分)结构有问题,上面是带时间戳的
+> user,然后可能还要拼接每次补写就落一次的历史事件也可能带时间戳,**模型会自然理解成那个
+> 时间戳开始的时间段**,所以得把算法里给的那个时间段取出来才行,不能这样干写。」
+> 真值以 `server/app/engine.py` 的 `_card_job` 为准。
+
+> 【2026-10-29 20:28 更正】`gap_note` **整段已删**。它原来的条件是「空档 > 60 秒 → 说
+> 『中间的时间平平淡淡,没发生值得记的事』」—— 那是**模板冒充判定**:和"值不值得记"没有
+> 任何计算关系,却当成事实喂给模型(实测模型照着写了「这段时间确实什么都没干,就光坐着
+> 发呆」)。用户口径:「没判定到触发就直接 pass 掉啊,给模型看干嘛,甚至都不该有多余的
+> 后续执行逻辑」。事件的绝对时刻已经在 `w0`/`w1` 里,模型不需要这段旁白。
 
 > 【2026-09-21 23:10 更正】原块第 1 句「此刻没有人在跟你说话,你一个人过着平常的一天。」
 > 与第 3 句「时间由系统给你,别自己报时间;不要写别的时间段的事。」**整个仓库里都不存在**
@@ -350,7 +405,7 @@ gap_note(server/app/engine.py 的 _card_job 里的 gap_note):
 - 一次 LLM 调用生成整段 JSON 再手工伪造轮次 —— 绕开 loop + 伪造,废。
 - 第二 AgentLoop(补写专用 loop/composer)—— 她只有一个大脑,收编,废。
 - λ(t) 速率 + ∫λ dt 把离线长度卷进期望 —— 否决,改连续概率判定。
-- 预取一批时间段再填 / 空档后定点判定 —— 要的是逐格点连续概率判定,
+- 预取一批时间段再填 / 空档后定点判定 —— 要的是连续概率判定,
   空档概念消失(稀疏时段自然大片不命中),无单独"空档参数"。
 - 探针跨 seed 复用同一 SessionLog —— 上一 seed 的未来时间历史串进下一 seed,
   时间倒流乱码;每 seed 独立日志。

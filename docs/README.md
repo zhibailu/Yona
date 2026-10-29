@@ -3,7 +3,8 @@
 > Yona 2.0 的分层文档地图:谁放哪、读的顺序、状态标记。
 > 不再把所有东西挤进一两个根文件;每个话题有自己的一份,每份标状态。
 > 阅读入口 = 本文件 → 相关子目录 → 目标代码模块头部注释。
-> **最近核对 2026-09-21 23:40。**
+> **最近核对 2026-10-08 20:52。** —— 本页规则未变;本轮新增 `docs/protocols/MCP.md`
+> 并登记进上面的目录树,`decisions/TIMELINE.md` 追加 2026-10-08 那节。
 
 ---
 
@@ -45,7 +46,9 @@ yona-rewrite/
 │  ├─ README.md                · 模块协议规则
 │  ├─ LIFE_BACKFILL.md         · 生活补写协议
 │  ├─ SUBAGENT.md              · 子代理协议(工人身份的 loop 复用)
-│  └─ TOOL_VISIBILITY.md       · 工具可见性协议(谁在什么轮次看得见哪些工具)
+│  ├─ TOOL_VISIBILITY.md       · 工具可见性协议(谁在什么轮次看得见哪些工具)
+│  └─ MCP.md                   · 外部工具怎么接进来:**不自研适配层,用现成 MCP server**
+│                                (2026-10-08 拍方向;具体装哪些 ⏳)
 └─ docs/public/                · **对外文档**(给使用者/贡献者看的英文层)
    ├─ README.md  ARCHITECTURE.md  COMPARISON.md  FAQ.md  ROADMAP.md
 ```

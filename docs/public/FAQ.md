@@ -71,7 +71,9 @@ Likely the model connection isn't configured. Open the UI wizard, enter base_url
 > 【2026-09-21 23:25 更正】原文后半句给了一条**无效**的排查路径(服务端不读 .env)。 —— 真相:同「What model do I need?」那条;503 的抛出点 `server/main.py` 里那句 `if engine._loop is None:` 与 `engine.start()` 的 RuntimeError(`server/main.py` 的 `lifespan` 里 try/except RuntimeError 那段)。
 
 ### How do I confirm it's really acting?
-Open the inner-thought panel / the admin llm-log and you'll see each autonomous turn's input/output and token usage.
+Open the admin **llm-log** — every autonomous turn's input/output and token usage is there (ring buffer + live SSE).
+
+> 【2026-10-08 21:31 更正】原句还叫你去开 **inner-thought panel(生活事件面板)**,**那个面板已经删了**。 —— 真相:该面板 2026-09-22 11:20 用户拍板摘除,后端 `GET /admin/life-events` 已从 `server/app/api/view.py` 删除(模块头记着这次摘除);llm-log 还活着 = 同文件的 `@router.get("/admin/llm-log")` 与 `@router.get("/admin/llm-log/stream")` 两端点 + `static/index.html` 的 `#llm-log-panel`。自走轮本身仍写进卡的 `chat.log`,只是聊天视图不显示(`server/store.py` 的 `_messages_view()`)。
 
 ### Where are the logs / data?
 `data/` (gitignored): `sessions/<sid>/{chat.log, meta.json, images/}`, `archive/` (deleted cards are archived here, not erased), `presets/`, `llm.local.json`. The memory index does **not** live here — it's a rebuildable cache in top-level `cache/`. Isolate with `YONA_DATA_DIR` and `YONA_CACHE_DIR`.

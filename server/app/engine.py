@@ -905,7 +905,7 @@ def begin_self_wake(log=None, rng=None) -> float:
 
       - **可消费区间** = [最后一次交互/事件的时刻(日志尾), 触发本轮的
         "当前现实时间"(当前时刻)] —— 她离上次互动到现在,这段时间能消费什么;
-      - 在这区间上跑 LifeSampler(逐格点命中 → 事件 start + 预算);
+      - 在这区间上跑 LifeSampler(thinning 直接抽事件 → 事件 start + 预算);
       - **兜底**:start + 预算 ≤ 当前时刻;LifeSampler 内建 end=min(...) 已截断,
         即预算超了会被截成 当前时刻−start(她不能"还没到点就做了超出的事");
       - 命中 → 本轮预算 = 该事件的 budget(截断后,LLM 只看到减后的结果);
@@ -1090,7 +1090,10 @@ def _build_engine(cfg: dict | None = None) -> None:
         return "[时间预算] " + personas_mod.WAKE_BUDGET_TEMPLATE.format(gap=gap)
 
     wake_budget_section = SystemSection(
-        name="wake_budget", priority=17, producer=_wake_budget_text)
+        name="wake_budget", priority=55, producer=_wake_budget_text)
+    # priority 17 → 55(2026-10-29 用户拍板:按易变性排、保前缀缓存)。
+    # 本段「[时间预算] 这段时间约 X…」**每个事件都变**,属易变段,
+    # 必须排在稳定段(人设/情境/工具用法/状态)之后、`[当前时间]`(90)之前。
 
     # 陪聊轮 = {owner} 正在跟她说话:只给世界时刻([当前时间]),**不挂 [时间线]**
     # —— 那是独处轮(自走/补写)看的:她一个人待着才需要"距上次和{owner}说话
@@ -1280,6 +1283,23 @@ def _start_heartbeat() -> None:
 
 # ---------- 离线生活补写检测(启动时) ----------
 
+def _life_anchor(
+    tail_event_time: float | None, covered_until: float
+) -> float | None:
+    """一张卡"活到什么时候"的**唯一锚点**(2026-10-29 补游标)。
+
+    取 `max(日志最后一条事件的 time, 补写游标)`。
+
+    为什么不能只用最后一条事件:补写窗口的终点是 `now`,而事件的**起点**必然早于 now
+    (平均间隔 16 小时)。只拿事件起点当锚点,补完之后 gap 仍然几小时,于是**每次重启
+    都会再判一次离线、再补一小段** —— 这是 2026-10-29 用户看到"重启又补了一遍"的原因。
+    游标(`SessionStore.life_covered_until`)记的就是"上次补到/覆盖到哪"。
+    """
+    if tail_event_time is None:
+        return covered_until or None
+    return max(tail_event_time, covered_until or 0.0)
+
+
 def _wake_decision(
     last_active: float | None, now: float | None = None
 ) -> tuple[bool, str, float]:
@@ -1343,15 +1363,23 @@ def _maybe_backfill_life() -> None:
     def _card_job(sid: str):
         """**一张卡**的补写 = **一个队列项**(不可分割,见本函数 docstring)。"""
         card_log = _store.load_log(sid)
-        last_active = card_log.events[-1].time if card_log.events else None
-        # 第三个返回值(gap 秒)**这里用不到** —— 2026-09 清理改成 `_`,因为下面
-        # 循环里还会算出另一个**语义完全不同**的 gap(两件事之间的空档),同名必看错。
+        covered = _store.life_covered_until(sid)
+        last_active = _life_anchor(
+            card_log.events[-1].time if card_log.events else None, covered
+        )
+        # 第三个返回值(gap 秒)**这里用不到** —— 2026-09 清理改成 `_`。
         # ⚠ `_wake_decision` 的返回值**不许删**:第三项有测试在用
         # (test/test_backfill.py 的 `test_decision_long_gap_backfills` 直接断言
         #  `gap > WAKE_AFTER_GAP_SECONDS`),这里只是"不接住它"。
+        # (2026-10-29:原来下面还另算一个"两件事之间的空档" idle_gap,随 gap_note
+        #  一起删了 —— 现在这里没有第二个 gap 概念,不会再看错。)
         trigger, reason, _ = _wake_decision(last_active)
         print(f"[backfill] 卡片 {sid}: {reason}")
         if not trigger:
+            # 2026-10-29 用户口径:「没判定到触发就直接 pass 掉啊……甚至都不该有
+            # 多余的后续执行逻辑,只应该推动了游标就结束了」。所以这里**不加任何
+            # 后续动作**,只把"已覆盖到 now"记下来。
+            _store.mark_life_covered(sid)
             return
         now = time.time()
         sampler = LifeSampler(last_active, now)
@@ -1359,38 +1387,38 @@ def _maybe_backfill_life() -> None:
         if not events:
             print("[backfill] 采样器无事件(离线太短 / 落在稀疏时段 /"
                   "恰好没判定中),跳过")
+            # 同上:没抽到事件 = 这段日子没什么可补 → 不调模型,只推进游标。
+            _store.mark_life_covered(sid, now)
             return
         empty_tools = ToolRegistry([])  # 补写是"那段日子怎么过的",不该有实时工具
         snap = _store.get_session_settings(sid)
         persona = snap.get("system_prompt") if snap.get("system_prompt") else None
-        for i, e in enumerate(events):
+        for e in events:
             # 预算限制:budget(约 X 分钟)= "做一件做得完的事"的上限,
             # 不是事件属性,不进日志,只当轮可见。
-            # 相对时间:距上一件事(名义上在 prev.start+prev.budget 结束)
-            # 的空档,让模型知道中间过了多久(不然它以为"刚才还在做上一件")。
             # 事件只有起始时间,没有终止/消费时长(用户定的)。
-            if i == 0:
-                gap_note = ""
-            else:
-                prev = events[i - 1]
-                # 改名 idle_gap(2026-09 清理):它是**两件生活事件之间**的空档,
-                # 与 _wake_decision 返回的"离线时长 gap"是两回事 —— 同名会让人
-                # 以为这里在复用上面那个值(上面那个已改成 `_`,根本没接住)。
-                idle_gap = e.start - (prev.start + prev.budget_min * 60)
-                if idle_gap > 60:
-                    gap_note = (
-                        f"\n距离你上一件事做完已经过了约 {_human_gap(idle_gap)}"
-                        "(中间的时间平平淡淡,没发生值得记的事)。"
-                    )
-                else:
-                    gap_note = "\n你上一件事刚做完不久。"
-            # note 只留"动态"部分(本段多长/隔了多久)——静态部分
+            # ⚠️ 2026-10-29 用户口径:「不能这样干写『这段时间』」——
+            # 上下文里到处都是**带时间戳**的东西(真人消息带、已落盘的补写事件也带),
+            # 只写"这段时间"时,模型会把它接到**上一条消息的时间戳**上,而不是接到
+            # 本事件真正的窗口上。所以文案必须给出**算法算出的绝对区间**(w0 → w1),
+            # 相对时长(约 X)只能当补充。
+            w0 = time.strftime("%m-%d %H:%M", time.localtime(e.start))
+            w1 = time.strftime(
+                "%m-%d %H:%M", time.localtime(e.start + e.budget_min * 60)
+            )
+            # ⚠️ 2026-10-29 用户口径:两件事之间的空档**不喂给模型** ——
+            # 「没判定到触发就直接 pass 掉啊,给模型看干嘛」。原来这里会拼一句
+            # 「距离你上一件事做完已经过了约 X(中间的时间平平淡淡,没发生值得记的
+            # 事)」,那是**模板冒充判定**:分支条件只有"空档 > 60 秒",和"值不值得
+            # 记"没有任何计算关系,却当成事实喂给模型(实测模型照着写了
+            # 「这段时间确实什么都没干,就光坐着发呆」)。事件的绝对时刻本身就
+            # 在 w0/w1 里,模型不需要这段旁白。
+            # note 只留"动态"部分(本段多长)——静态部分
             # (独处轮怎么说)在 personas.SELF_SITUATION(补写复用同一份,
             # 2026-09 用户拍板合一,曾另写 BACKFILL_SITUATION,已删)。
             note = (
-                f"这段时间(约 {_human_gap(e.budget_min * 60)})里你只做了"
+                f"从 {w0} 到 {w1}(约 {_human_gap(e.budget_min * 60)})里你只做了"
                 "**一件事**——就是现在刚做完/正在做的这一件。"
-                f"{gap_note}"
             )
             card_log.set_time_cursor(e.start)
             _backfill_clock["ts"] = e.start
@@ -1405,7 +1433,17 @@ def _maybe_backfill_life() -> None:
             _live(
                 f"补写 {time.strftime('%m-%d %H:%M', time.localtime(e.start))} …"
             )
-        _store.save_log(sid, card_log)
+            # 2026-10-29 用户拍板:「模型补写一件事就落盘日志一次,而不是等到
+            # 一整个遍历结束」。原实现只在**整张卡跑完**后 save 一次 ——
+            # 一张 38 天的卡 ≈ 57 个事件、每个事件一次 LLM 调用,中途重启 /
+            # Ctrl+C 会让前面几十次调用**全部作废**,而且磁盘上不留任何痕迹
+            # (日志文件 mtime 一动不动),下次启动从同一个"离线 38 天"重来。
+            _store.save_log(sid, card_log)
+        # 2026-10-29 用户拍板:补写**跑完就推进游标** —— 游标 = 这次补写窗口的终点
+        # `now`(不是"最后一条事件的时刻")。这样下次启动的离线 = now - 覆盖到 ——
+        # 约等于 0,不会再被判成"离线 X 小时"重补一遍。
+        # 注意:走到这里才推进 —— 中途异常/被杀不会推进,下次从断点续。
+        _store.mark_life_covered(sid, now)
         if _life_gate is not None:
             _life_gate.mark_self()  # 补写过 → 心跳进入冷却,节奏衔接
         f0 = time.strftime("%m-%d %H:%M", time.localtime(events[0].start))

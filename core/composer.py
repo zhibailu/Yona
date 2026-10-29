@@ -201,11 +201,15 @@ def make_usage_section(
 def make_timeline_section(
     log=None,
     now_epoch=None,
-    priority: int = 16,
+    priority: int = 50,
     name: str = "timeline",
     timeline_template: str = "[时间线] 距上次和{owner}说话: {gap}",
 ) -> SystemSection:
     """会话时间线段:距上次真人互动多久(派生自日志,不是额外状态)。
+
+    ⚠️ **默认 priority 2026-10-29 由 16 改成 50**(用户拍板:按易变性排、保前缀缓存)。
+    本段内容是「距上次和 X 说话: N 分钟前」—— **分钟级会变**,属易变段,必须排在
+    稳定段(人设/情境/工具用法/状态)之后。改回小数字会让它后面的所有内容失去缓存。
 
     VISION 决策 8 的推论:世界 section 给"绝对时间"(当前时刻,时钟);
     本段给"相对时间"(距上次互动)——模型靠它区分"刚聊完"vs"久别"。

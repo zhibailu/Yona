@@ -71,8 +71,21 @@ def test_world_section_injects_current_time():
     text = composer.compose()
     assert "[当前时间]" in text, text
     assert "20" in text or "2" in text  # 至少带年份/时分数字
-    # 段序:persona -> world -> state -> usage
-    assert text.index("你是小夜子") < text.index("[当前时间]") < text.index("[当前角色状态]")
+    # 段序(2026-10-29 按易变性排,保前缀缓存):persona -> state -> world
+    # 关键:[当前时间](分钟级)必须**最后** —— 它一变,它后面的一切都失去缓存。
+    assert text.index("你是小夜子") < text.index("[当前角色状态]") < text.index("[当前时间]")
+
+
+def test_section_order_is_volatility_ascending():
+    """2026-10-29 用户拍板:段按"易变性升序"排,保前缀缓存。
+
+    稳定 → 易变:人设(不变)→ 工具用法(工具集变才变)→ 状态(换衣服才变)
+    → `[当前时间]`(每分钟)。
+    """
+    state = CharacterState({"clothes": "白衬衫"})
+    tools = ToolRegistry([make_change_outfit_tool(state)])
+    composer = build_small_night_composer("你是小夜子", state, tools)
+    assert composer.names() == ["persona", "tool_usages", "state", "world"]
 
 
 def test_world_section_accepts_injected_clock():
@@ -143,6 +156,7 @@ if __name__ == "__main__":
     test_change_outfit_rejects_unregistered_arg()
     test_state_projection()
     test_world_section_injects_current_time()
+    test_section_order_is_volatility_ascending()
     test_world_section_accepts_injected_clock()
     test_world_section_present_in_default_composer_only_once()
     test_time_is_not_a_tool()

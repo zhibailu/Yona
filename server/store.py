@@ -531,6 +531,41 @@ class SessionStore:
             meta["updated_at"] = _now_iso()
             self._write_meta(session_id, meta)
 
+    # ---------- 补写游标(2026-10-29 用户拍板:补完就推进,不再靠"最后一条事件"重算) ----------
+
+    def life_covered_until(self, session_id: str) -> float:
+        """这张卡的「生活已覆盖到哪一刻」(epoch 秒);没记录 = 0.0。
+
+        **为什么要有它**(2026-10-29):补写的离线起点原来取 `chat.log` 最后一条事件的
+        `time`,而补写窗口的终点是 `now` —— 那个起点必然比 now 早几个小时(事件平均
+        间隔 16 小时),于是**每次重启都会再判成一次离线**,再补一小段。这个游标就是
+        「上次补写/判定推进到了哪」,把它算进锚点才能收敛。
+        """
+        meta = self._read_meta(session_id)
+        if not meta:
+            return 0.0
+        try:
+            return float(meta.get("life_covered_until") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def mark_life_covered(self, session_id: str, ts: float | None = None) -> None:
+        """把游标推进到 `ts`(默认 now)。
+
+        ⚠️ **补写结束就调它 —— 包括"没事件/没触发"的跳过路径**(用户 2026-10-29:
+        「没判定到触发就直接 pass 掉啊……只应该推动了游标就结束了」)。
+        没触发也推进,是因为"这次重启没东西可补"这件事本身已经把那段时间覆盖了。
+
+        **写法是读-改-写,只动 `life_covered_until` 这一个键**,meta 里别的字段
+        (`id` / `title` / `updated_at` / `settings` …)原样保留 —— meta 是**增量文件**,
+        不许整份重建。meta 不存在时**不写**(不凭空造卡)。
+        """
+        meta = self._read_meta(session_id)
+        if meta is None:
+            return
+        meta["life_covered_until"] = time.time() if ts is None else float(ts)
+        self._write_meta(session_id, meta)
+
 
 def _blocks_text(content) -> str:
     """消息块列表 → 纯文本(UI 契约是字符串 content)。

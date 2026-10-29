@@ -1,7 +1,11 @@
 # 当前状态 / 进度(tasks)
 
 > 来自旧 `MAP.md` 三节。完成 = 收口 + 测试绿;服务端契约/UI 现状见 docs/STRUCTURE.md。
-> **最近核对 2026-09-21 22:50** —— 本节数字(端点数 / 测试数)会随代码漂,核对过就改这一行。
+> **最近核对 2026-10-08 20:52** —— 本节数字(端点数 / 测试数)会随代码漂,核对过就改这一行。
+> **本轮复核实测**:端点 **30** 个(`server/main.py` 13 + `api/config.py` 7 +
+> `api/media.py` 5 + `api/view.py` **4** + `api/chat.py` 1);`test/test_*.py` **24** 个。
+> ⚠️ 注意:端点的定位文件是 **`server/main.py`**(不是 `server/app/main.py`);`server/app/`
+> 下只有 engine / gate / llm_setup / worker_tools + `api/` 四个 router 模块。
 
 ## 当前状态
 
@@ -112,3 +116,48 @@
   `decision-doc-maintenance` 与 `AI-GUARDRAILS.md §五`。
 - 规则:**每条记录带 `YYYY-MM-DD HH:MM`**;新拍板当场回旧节标作废;
   前后对不上立刻报用户、默认以更晚那条为准;已讨论清楚的方案自觉写进文档。
+
+### 任务 10 · LifeSampler 换抽法:thinning 直接采样(2026-10-08,用户拍板)
+
+**权威记录在 `docs/decisions/TIMELINE.md` 的「2026-10-08 20:40」那节**,这里只登记"产品侧落了什么":
+
+- **`server/rhythm.py`**:`LifeSampler.sample()` 从"逐格点掷伯努利骰子"换成
+  **thinning(Lewis-Shedler 拒绝采样)**;新增 `_next_event_after()`;
+  `ShapeCurve.peak()` 新增(接受上界 —— 表是整数结点线性插值 + 睡眠窗阶跃,
+  极值必在折点,26 次求值即精确)。
+- **判定语义一个字没改**:`rate(t) = K×shape(t)`、K=1.5、`SHAPE_TABLE`、睡眠窗
+  23:30–06:30、5 分钟截断、`Event` 形状、构造签名、`rng`/`seed` 注入全部原样。
+- **实测**:分布一致(30 天 ×400 次:39.70 vs 39.55 件,0.38σ;小时分布最大偏差
+  0.65 个百分点);速度 30 天 **33×**、365 天 **128×**;10 万用户各补 30 天
+  **3,157.9s → 100.73s**。
+- **新增测试**:`test/test_backfill.py` 三条(`test_peak_is_a_true_upper_bound`、
+  `test_events_track_shape_between_awake_windows`、`test_events_are_not_quantized_to_the_grid`);
+  `test/test_engine_clock.py` 一处写死的 seed 改成搜索命中 seed(换算法后它必然红)。
+- **连带**(见 `OPEN.md`):`GRID_SEC` 的 ✅「判定粒度」语义没了,新登记为 ⏳ 待拍。
+
+> ⚠️ **过程记录(留给下一个我)**:这次是**直接落进内核**的,不是"先在测试区验、
+> 再由用户命令写入主路"。规矩在 skill `change-scope-discipline` §四「实验与内核分离」,
+> 被越过的正是那道门。用户 2026-10-08 决定**不退回**,但要求记住次序 —— 详见
+> `docs/decisions/TIMELINE.md` 2026-10-08 那节最后一栏。
+
+### 任务 11 · 离线补写:每件事落一次盘 + `self_note` 改绝对区间 + 补上补写游标(2026-10-29,用户拍板)
+
+**权威记录在 `docs/decisions/TIMELINE.md` 的「2026-10-29 20:40」那节**,这里只登记"产品侧落了什么":
+
+- **`server/app/engine.py` 的 `_card_job`**:`save_log` 从"整张卡跑完后一次"改成
+  **循环体内每轮一次**(用户原话:「模型补写一件事就落盘日志一次,得改」)。
+- **`self_note` 文案**:"这段时间(约 X)" → **"从 {w0} 到 {w1}(约 X)"**;
+  用户理由:上下文里全是带时间戳的消息,模型会把"这段时间"接到**上一条消息的时间戳**上。
+- **空档不再进 prompt**:删掉 `gap_note` 整段(用户:「没判定到触发就直接 pass 掉啊,
+  **给模型看干嘛**」)。它原来是**模板冒充判定** —— 条件只有"空档 > 60 秒"。
+- **补写游标(本次的核心)**:卡 `meta.json` 新增 `life_covered_until`;锚点改成
+  `max(最后一条事件的 time, 游标)`;补写跑完推游标到窗口终点 `now`;
+  **没触发 / 0 个事件 → 只推游标就 return**。用户:「30min 只是个前置阈值……**只应该推动了
+  游标就结束了**」。
+- **实测**:三张卡在 10-29 19:38–19:49 陆续落盘;模型前一轮确实复读过提示词
+  (「`user在这段时间里只做了一件事：…`」)。
+- **测试**:`test/test_backfill.py` 新增两条游标回归 + 全仓 **24 个测试全绿**;
+  `life_covered_until` 的落盘/重载/缺卡冒烟通过。
+- **⏳ 仍未定(用户明说不急)**:`budget`(每件事的消费时长)进不进日志 —— 现在
+  `grep '"budget'` 全仓日志 0 命中,所以"最后一件事什么时候**结束**"无法从数据恢复。
+  用户原话:「日志的事不急,本来就是还在测试的模块,不着急联调」。

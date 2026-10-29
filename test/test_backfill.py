@@ -2,7 +2,8 @@
 
 对应:
 - server/main.py 的 _wake_decision(触发判定,纯函数)
-- server/rhythm.py 的 LifeSampler(§10:rate=K×shape 逐格点伯努利判定,
+- server/rhythm.py 的 LifeSampler(§10:rate=K×shape 连续概率判定,
+  判定本身没变、**抽法** = thinning 直接采样(2026-10-08 换);
   期望件数 = K×∫shape(窗口);事件 = start + budget,无终止时间)
 - core/session_log.py 的 time_cursor(补写轮事件落历史时刻)
 纯函数/确定性,不调模型。
@@ -19,6 +20,7 @@ from server.app import engine as sm  # noqa: E402  (原 server.main facade 已�
 from core.session_log import SessionLog  # noqa: E402
 from server.rhythm import (  # noqa: E402
     DEFAULT_DURATION_MIX,
+    GRID_SEC,
     LifeSampler,
     ShapeCurve,
     integral_shape,
@@ -60,6 +62,34 @@ def test_decision_long_gap_backfills():
     tr, reason, gap = sm._wake_decision(last, now=_ts(0, 30))
     assert tr is True and "补写" in reason
     assert gap > sm.WAKE_AFTER_GAP_SECONDS
+
+
+def test_anchor_takes_the_later_of_tail_and_cursor():
+    """锚点 = max(最后一条事件的时刻, 补写游标)。2026-10-29 补游标。"""
+    # 游标比事件新(上次补到更晚)→ 用游标
+    assert sm._life_anchor(100.0, 200.0) == 200.0
+    # 事件比游标新(你后来又聊过天)→ 用事件
+    assert sm._life_anchor(300.0, 200.0) == 300.0
+    # 从没补写过(游标 0)→ 退回事件(与改前行为一致)
+    assert sm._life_anchor(300.0, 0.0) == 300.0
+    # 全无历史 / 只有游标
+    assert sm._life_anchor(None, 0.0) is None
+    assert sm._life_anchor(None, 200.0) == 200.0
+
+
+def test_backfill_cursor_closes_the_gap_on_restart():
+    """补写完游标 = now → 下次重启不再判成离线(2026-10-29 用户口径)。
+
+    这是"重启又补了一遍"那条 bug 的回归测试:没游标时必然再触发。
+    """
+    now = _ts(0, 30)
+    tail_event = now - 16 * 3600  # 最后一条事件在 16 小时前(事件平均间隔)
+    # 改前:锚点只看事件 → 判成离线,反复补
+    assert sm._wake_decision(tail_event, now=now)[0] is True
+    # 补写跑完把游标推到 now(窗口终点)之后:不再触发
+    anchor = sm._life_anchor(tail_event, now)
+    tr, reason, _ = sm._wake_decision(anchor, now=now)
+    assert tr is False and "正常重启" in reason
 
 
 # ---------- §10 采样器:连续概率判定语义 ----------
@@ -155,6 +185,63 @@ def test_density_curve_time_dependent():
     assert late > dawn * 5 and late > 0.3, f"晚间 {late} 应远多于凌晨 {dawn}"
 
 
+# ---------- §10 抽法:thinning(2026-10-08 换;判定语义不变) ----------
+
+def test_peak_is_a_true_upper_bound():
+    """thinning 的接受上界必须是**真上界**。
+
+    接受概率 = rate(t)/上界 —— 上界估小 → 概率 > 1 → 全部接受 →
+    分布被抹平成"醒着就均匀"。表是整数结点线性插值 + 睡眠窗阶跃,
+    分段线性函数的极值必落在折点上,所以折点求值即精确值。
+    """
+    for table in (None, _DENSE):     # None = 真实 SHAPE_TABLE
+        curve = ShapeCurve(table)
+        exact = curve.peak()
+        # 细扫(千分之一小时)不得扫出比它更大的值
+        fine = max(curve(h / 1000.0) for h in range(24000))
+        assert abs(exact - fine) < 1e-9, (exact, fine)
+        assert all(curve(h / 100.0) <= exact + 1e-12 for h in range(2400))
+    # 上界必须 > 0,且落在真实曲线的峰上(晚间 19-20 是那版的最高点)
+    real = ShapeCurve()
+    assert abs(real.peak() - real(19.0)) < 1e-9
+
+
+def test_events_track_shape_between_awake_windows():
+    """判定分布跟着 shape 走 —— 不是"醒着就均匀"。
+
+    这是换抽法后最该守住的那道闸:单位/上界写错的**症状**是事件在清醒
+    时段退化成均匀分布,那样"上午 7-10"与"晚间 18-21"会一样多(比值≈1)。
+    正确的比值贴近 ∫shape 之比(≈2.7),不是"时长之比"(=1)。
+    """
+    morning = _mean_events(_ts(7, 0), _ts(10, 0), k=1.5, seeds=400)
+    evening = _mean_events(_ts(18, 0), _ts(21, 0), k=1.5, seeds=400)
+    ratio_expect = integral_shape(18.0, 21.0) / integral_shape(7.0, 10.0)
+    assert ratio_expect > 2.0, ratio_expect   # 前提:两段 shape 面积确实差得多
+    assert morning > 0, "上午窗口一个事件都没有 —— 这个对照就不成立了"
+    ratio = evening / morning
+    assert ratio > 1.8, (
+        f"晚间/上午 = {ratio:.2f} 太接近 1 —— 分布被抹平成'醒着就均匀'了")
+    assert abs(ratio - ratio_expect) < 0.8, (
+        f"比值 {ratio:.2f} 偏离 ∫shape 之比 {ratio_expect:.2f}")
+
+
+def test_events_are_not_quantized_to_the_grid():
+    """现版抽的是**连续过程本身**:事件时刻不再被量化到 GRID_SEC 刻度上。
+
+    这条同时是"确实走的 thinning、不是原逐格点版"的指纹 ——
+    原版的 start 必然落在 t0 + k·GRID_SEC 的格点上,现版不会。
+    """
+    t0 = _ts(9, 0)
+    starts = []
+    for seed in range(40):
+        starts += [e.start for e in LifeSampler(
+            t0, _ts(21, 0), seed=seed, K=8.0,
+            shape=ShapeCurve(_DENSE)).sample()]
+    assert starts, "40 个 seed 一件都没有 —— 采样器坏了"
+    off_grid = [s for s in starts if abs((s - t0) % GRID_SEC) > 1e-6]
+    assert off_grid, "所有事件都落在格点上 —— 还是原来的逐格点实现?"
+
+
 # ---------- SessionLog 时间游标 ----------
 
 def test_time_cursor_stamps_events():
@@ -182,6 +269,8 @@ if __name__ == "__main__":
     test_decision_no_history_no_backfill()
     test_decision_short_gap_no_backfill()
     test_decision_long_gap_backfills()
+    test_anchor_takes_the_later_of_tail_and_cursor()
+    test_backfill_cursor_closes_the_gap_on_restart()
     test_shape_normalized_and_sleep_zero()
     test_events_in_range_ordered_nonoverlap()
     test_events_budget_within_mix_bounds()
@@ -191,6 +280,9 @@ if __name__ == "__main__":
     test_no_event_crosses_sleep_start()
     test_events_seeded_reproducible()
     test_density_curve_time_dependent()
+    test_peak_is_a_true_upper_bound()
+    test_events_track_shape_between_awake_windows()
+    test_events_are_not_quantized_to_the_grid()
     test_time_cursor_stamps_events()
     test_time_cursor_cleared_uses_wallclock()
     print("backfill(离线生活补写·§10 连续概率判定) all tests passed")

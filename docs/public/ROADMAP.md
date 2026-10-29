@@ -16,7 +16,7 @@
 | Offline-life backfill | ✅ | gap over threshold → fill the days back into the card |
 | Per-card life | ✅ | life lives on the session you're talking to, not one global stream |
 | surface governance | ✅ | delete/edit = annotation, never log rewrite, incl. tool-pair validation |
-| Observability | ✅ | transcript / inner-thought feed / llm-log (SSE live) / foldable tool traces |
+| Observability | ✅ | transcript / llm-log (SSE live) / foldable tool traces |
 | Model-connection management | ✅ | UI wizard pulls models, hot-swap without restart; OpenAI-compatible endpoints |
 | Multi-session + per-session snapshot | ✅ | temperature / context rounds / model / persona override per session |
 | Long-term memory recall | ✅ | `recall` tool over a per-card sqlite index built from the log (top-level `cache/`), optional local BGE embeddings |
@@ -25,7 +25,9 @@
 
 - **Vertical-scenario tuning**: how solitude vs. backfill situation copy reads, and the autonomous-turn SYSTEM layout — to be validated with real models across times/situations, not decided on paper.
 - **Final sign-off on the life-sampling shape curve** (the evening-peak version is the current candidate).
-- Making the inner-thought panel / llm-log observability more convenient in the UI.
+- Making the **llm-log** panel more convenient in the UI.
+
+> 【2026-10-08 21:31 更正】本节第三条与本文件 §1 的 Observability 行原都写着 **inner-thought panel(内心活动 / 生活事件面板)**,而**该面板已经不存在**。 —— 真相(代码为事实):后端两端点 `GET /workspace` 与 `GET /admin/life-events` 已从 `server/app/api/view.py` 删除(该文件模块头记着 2026-09-22 11:20 这次摘除,`server/main.py` 头部同记);前端 `#inner-life` pane 已从 `static/index.html` 移除。**用户 2026-09-22 11:20 拍板「3 摘掉吧那就」**。还活着的观测面 = `@router.get("/admin/llm-log")` + `/admin/llm-log/stream`(SSE)与工具轨迹折叠。**这是"文档 vs 代码"类冲突,按代码改文档**;`docs/public/ARCHITECTURE.md` §7 早在 2026-09-22 已标过,本文件是漏改。
 
 ## 3. Backlog (⏳ deliberately not prioritized)
 

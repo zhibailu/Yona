@@ -152,7 +152,7 @@ When the process restarts after being off long enough (gap > threshold), **every
 
 ```
 set the log's time cursor
-  → LifeSampler(offline start → boot time).sample()     # dice per grid point
+  → LifeSampler(offline start → boot time).sample()     # thinning direct-sampling
   → each hit event: run one source="self" replay turn
       world time = historical cursor (the model sees "then")
       one thing per turn; note hints "this was ~X, you had ~Y gap"
@@ -165,9 +165,9 @@ Key: **backfill = the replay of an autonomous turn**, not a second persona and n
 
 ### 5.4 Per-card life: life belongs to "that card"
 
-There is no longer an anonymous global life stream. Life belongs to **the card you're actively talking to**: a heartbeat wake means that card is awake; its autonomous events are written into its own log (invisible in chat view — the inner-thought panel reads them straight from the log, and the model only sees them when she calls the `recall` tool; life events no longer sit in the prompt at all). Deleting a card archives it first; the flagship card falls back and auto-rebuilds.
+There is no longer an anonymous global life stream. Life belongs to **the card you're actively talking to**: a heartbeat wake means that card is awake; its autonomous events are written into its own log (invisible in chat view — they sit in that card's own log, and the model only sees them when she calls the `recall` tool; life events no longer sit in the prompt at all). Deleting a card archives it first; the flagship card falls back and auto-rebuilds.
 
-> 【2026-09-21 23:25 更正】原文说生活事件"model context 也看得见",已被 2026-09-21 拍板推翻。 —— 真相:`core/session_log.py` 的 `derive_messages()`(「生活事件不进投影(2026-09-21 用户拍板)」,已结束的**独处轮**的 assistant 消息**整条跳过**);`server/app/engine.py` 里那句注释「⚠️ 这里**没有** life_event_prefix(2026-09-21 拆除):生活事件整条不进投影,取用路径只剩 `recall` 工具」;聊天视图隐藏 = `server/store.py` 的 `_messages_view()`;取用 = `character/tools.py` 的 `make_recall_tool`(`server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行注册)。
+> 【2026-09-21 23:25 更正】原文说生活事件"model context 也看得见",已被 2026-09-21 拍板推翻。 —— 真相:`core/session_log.py` 的 `derive_messages()`(「生活事件不进投影(2026-09-21 用户拍板)」,已结束的**独处轮**的 assistant 消息**整条跳过**);`server/app/engine.py` 里那句注释「⚠️ 这里**没有** life_event_prefix(2026-09-21 拆除):生活事件整条不进投影,取用路径只剩 `recall` 工具」;聊天视图隐藏 = `server/store.py` 的 `_messages_view()`;取用 = `character/tools.py` 的 `make_recall_tool`(`server/app/engine.py` 里 `_tools.register(make_recall_tool(recall_index))` 那一行注册)。另:§5.4 正文原句里那个读取者"内心活动面板"已于 2026-09-22 11:20 摘除(见 §7),该处 2026-10-08 21:31 已改为直说"日志本身"。
 
 ---
 
